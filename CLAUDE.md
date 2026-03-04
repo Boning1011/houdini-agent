@@ -39,6 +39,10 @@ parms = h.get_parms("/obj/geo1")
 | `get_attribs(node_path, attrib_class)` | Get geometry attributes |
 | `create_node(parent, type, name)` | Create a node |
 | `delete_node(path)` | Delete a node — **requires user confirmation** |
+| `backup(directory)` | Save a timestamped .hip backup (default: `$HIP/.agent_backups/`) |
+| `list_backups(directory)` | List available .hip backups, newest first |
+| `restore_backup(path)` | Load a .hip backup — **requires user confirmation** |
+| `undo_history(limit)` | Get log of agent's mutating operations |
 
 ## Safety Rules
 
@@ -51,6 +55,7 @@ parms = h.get_parms("/obj/geo1")
 **Ask user first:**
 - Saving .hip files
 - Deleting nodes
+- Restoring backups (`h.restore_backup()`)
 - File I/O (import/export)
 - Any operation that could destroy existing work
 
@@ -83,3 +88,5 @@ Consult these before writing Houdini Python code.
 - The server uses `hou.ui.addEventLoopCallback` to marshal calls from the HTTP thread to the main thread.
 - Default server port: **8765**
 - The server returns structured JSON with `{"status": "ok", "result": ...}` or `{"status": "error", "error": ...}`
+- All mutating operations are wrapped in `hou.undos` blocks — the user can **Ctrl+Z** to undo agent actions
+- Before multi-step operations, use `h.backup()` as a safety net

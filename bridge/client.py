@@ -181,3 +181,56 @@ class HoudiniClient:
     def node_exists(self, path):
         """Check if a node exists at the given path."""
         return self.query(f"hou.node('{path}') is not None")
+
+    # --- Undo & Backup ---
+
+    def undo_history(self, limit=50):
+        """Get the server-side log of mutating operations."""
+        resp = self._post("/undo_history", {"limit": limit})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
+    def backup(self, directory=None):
+        """Save a timestamped .hip backup. Returns the backup file path.
+
+        Default location: $HIP/.agent_backups/
+        """
+        dir_repr = repr(directory) if directory else "None"
+        code = f"""
+import os, time as _t
+_hip_path = hou.hipFile.path()
+_hip_dir = os.path.dirname(_hip_path)
+_hip_name = os.path.splitext(os.path.basename(_hip_path))[0]
+_backup_dir = {dir_repr} or os.path.join(_hip_dir, ".agent_backups")
+os.makedirs(_backup_dir, exist_ok=True)
+_ts = _t.strftime("%Y%m%d_%H%M%S")
+_backup_path = os.path.join(_backup_dir, f"{{_hip_name}}_{{_ts}}.hip")
+hou.hipFile.save(_backup_path)
+hou.hipFile.setName(_hip_path)
+_backup_path
+"""
+        return self.exec(code)
+
+    def list_backups(self, directory=None):
+        """List available .hip backups, newest first."""
+        dir_repr = repr(directory) if directory else "None"
+        code = f"""
+import os, glob as _glob
+_hip_path = hou.hipFile.path()
+_hip_dir = os.path.dirname(_hip_path)
+_backup_dir = {dir_repr} or os.path.join(_hip_dir, ".agent_backups")
+if not os.path.isdir(_backup_dir):
+    []
+else:
+    _files = _glob.glob(os.path.join(_backup_dir, "*.hip"))
+    sorted(_files, key=os.path.getmtime, reverse=True)
+"""
+        return self.exec(code)
+
+    def restore_backup(self, backup_path):
+        """Load a previously saved .hip backup.
+
+        WARNING: This replaces the current scene. Requires user confirmation.
+        """
+        return self.exec(f"hou.hipFile.load({repr(backup_path)})\nhou.hipFile.path()")

@@ -13,6 +13,7 @@ import ast
 import io
 import json
 import sys
+import time as _time
 import threading
 import traceback
 from contextlib import redirect_stdout
@@ -27,6 +28,33 @@ _server_instance = None
 
 # Persistent namespace for /exec — variables survive between calls
 _exec_namespace = {"hou": hou, "__builtins__": __builtins__}
+
+# Operation log — records mutating operations for diagnostics
+_operation_log = []
+_MAX_LOG_SIZE = 200
+
+
+def _with_undo(label, func):
+    """Wrap func in a Houdini undo block. Returns a new callable."""
+    def wrapped():
+        hou.undos.beginBlock(label)
+        try:
+            return func()
+        finally:
+            hou.undos.endBlock()
+    return wrapped
+
+
+def _log_operation(endpoint, label, success):
+    """Record a mutating operation in the operation log."""
+    _operation_log.append({
+        "timestamp": _time.strftime("%Y-%m-%d %H:%M:%S"),
+        "endpoint": endpoint,
+        "label": label,
+        "success": success,
+    })
+    if len(_operation_log) > _MAX_LOG_SIZE:
+        del _operation_log[:len(_operation_log) - _MAX_LOG_SIZE]
 
 
 def _main_thread_processor():
@@ -136,6 +164,7 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
         "/create_node": "_handle_create_node",
         "/delete_node": "_handle_delete_node",
         "/scene_snapshot": "_handle_scene_snapshot",
+        "/undo_history": "_handle_undo_history",
     }
 
     def do_POST(self):
@@ -200,7 +229,9 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                 "error": error_str,
             }
 
-        r = _run_on_main_thread(task)
+        label = f"Agent: exec {code[:50]}"
+        r = _run_on_main_thread(_with_undo(label, task))
+        _log_operation("/exec", label, r.get("ok", False))
         if r.get("ok"):
             self._send_json(r["value"])
         else:
@@ -284,7 +315,9 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                 parm.set(value)
             return {"set": list(parms.keys())}
 
-        r = _run_on_main_thread(task)
+        label = f"Agent: set_parms {path}"
+        r = _run_on_main_thread(_with_undo(label, task))
+        _log_operation("/set_parms", label, r.get("ok", False))
         if r.get("ok"):
             self._send_json({"success": True, "result": r["value"]})
         else:
@@ -345,7 +378,9 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
             new_node = parent_node.createNode(node_type, name)
             return {"path": new_node.path(), "type": new_node.type().name()}
 
-        r = _run_on_main_thread(task)
+        label = f"Agent: create {node_type} in {parent}"
+        r = _run_on_main_thread(_with_undo(label, task))
+        _log_operation("/create_node", label, r.get("ok", False))
         if r.get("ok"):
             self._send_json({"success": True, "result": r["value"]})
         else:
@@ -393,11 +428,17 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
             node.destroy()
             return {"deleted": path}
 
-        r = _run_on_main_thread(task)
+        label = f"Agent: delete {path}"
+        r = _run_on_main_thread(_with_undo(label, task))
+        _log_operation("/delete_node", label, r.get("ok", False))
         if r.get("ok"):
             self._send_json({"success": True, "result": r["value"]})
         else:
             self._send_json({"success": False, "error": r.get("error")}, 500)
+
+    def _handle_undo_history(self, body):
+        limit = body.get("limit", 50)
+        self._send_json({"success": True, "result": _operation_log[-limit:]})
 
 
 def _node_to_dict(node, depth):
