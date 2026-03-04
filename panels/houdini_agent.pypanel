@@ -3,16 +3,12 @@
   <interface name="houdini_agent" label="Houdini Agent" icon="MISC_python" help_url="">
     <script><![CDATA[
 import sys
-import os
 
-# Add repo root to path so bridge module can be imported
-_repo_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-_repo_root = os.path.normpath(_repo_root)
+_repo_root = r"C:\Users\vvox\Documents\GitHub\houdini-agent"
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-# Also add panels/ so the panel module can be found
-_panels_dir = os.path.dirname(os.path.abspath(__file__))
+_panels_dir = _repo_root + r"\panels"
 if _panels_dir not in sys.path:
     sys.path.insert(0, _panels_dir)
 
@@ -21,8 +17,8 @@ from houdini_agent_panel import HoudiniAgentPanel
 def onCreateInterface():
     return HoudiniAgentPanel()
 ]]></script>
-    <includeInPaneTabMenu>true</includeInPaneTabMenu>
-    <includeInToolbarMenu>false</includeInToolbarMenu>
+    <includeInPaneTabMenu menu_position="0" create_separator="false">true</includeInPaneTabMenu>
+    <includeInToolbarMenu menu_position="0" create_separator="false">false</includeInToolbarMenu>
     <help><![CDATA[Start and stop the Houdini Agent bridge server. The bridge allows Claude Code to control Houdini over HTTP.]]></help>
   </interface>
 </pythonPanelDocument>

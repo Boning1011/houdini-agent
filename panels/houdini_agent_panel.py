@@ -6,10 +6,9 @@ This runs inside Houdini and directly imports bridge.server (no HTTP needed).
 """
 
 import sys
-import os
 
 # Ensure repo root is on sys.path so bridge can be imported
-_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_repo_root = r"C:\Users\vvox\Documents\GitHub\houdini-agent"
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
