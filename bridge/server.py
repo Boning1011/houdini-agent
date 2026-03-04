@@ -384,7 +384,7 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
             return {
                 "point_count": len(geo.points()),
                 "prim_count": len(geo.prims()),
-                "vertex_count": len(geo.iterVertices()),
+                "vertex_count": geo.intrinsicValue("vertexcount"),
                 "point_attribs": attrib_list(geo.pointAttribs()),
                 "prim_attribs": attrib_list(geo.primAttribs()),
                 "vertex_attribs": attrib_list(geo.vertexAttribs()),
@@ -418,7 +418,7 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
             class_config = {
                 "point": (geo.pointAttribs, geo.pointFloatAttribValues, geo.pointIntAttribValues, geo.pointStringAttribValues, len(geo.points())),
                 "prim": (geo.primAttribs, geo.primFloatAttribValues, geo.primIntAttribValues, geo.primStringAttribValues, len(geo.prims())),
-                "vertex": (geo.vertexAttribs, geo.vertexFloatAttribValues, geo.vertexIntAttribValues, geo.vertexStringAttribValues, len(geo.iterVertices())),
+                "vertex": (geo.vertexAttribs, geo.vertexFloatAttribValues, geo.vertexIntAttribValues, geo.vertexStringAttribValues, geo.intrinsicValue("vertexcount")),
                 "detail": (geo.globalAttribs, None, None, None, 1),
             }
             cfg = class_config.get(attrib_class)
@@ -440,6 +440,19 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                 step = (elem_count - 1) / max(num_samples - 1, 1)
                 sample_indices = [int(round(i * step)) for i in range(num_samples)]
 
+            import math
+
+            def _scalar_stats(vals):
+                """Compute min/max/mean/stddev for a flat sequence of numbers."""
+                n = len(vals)
+                mn = min(vals)
+                mx = max(vals)
+                s = sum(vals)
+                mean = s / n
+                # Two-pass stddev for numerical stability
+                var = sum((v - mean) ** 2 for v in vals) / n
+                return mn, mx, mean, math.sqrt(var)
+
             result = {}
             for attrib in attribs:
                 name = attrib.name()
@@ -448,7 +461,6 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                 info = {"type": dtype, "size": size, "count": elem_count}
 
                 if attrib_class == "detail":
-                    # Detail: just return the value directly
                     try:
                         info["value"] = attrib.defaultValue() if elem_count == 0 else geo.attribValue(name)
                     except Exception:
@@ -456,59 +468,62 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                     result[name] = info
                     continue
 
-                if dtype in ("Float",):
-                    vals = float_fn(name)
+                if dtype in ("Float", "Int"):
+                    vals = float_fn(name) if dtype == "Float" else int_fn(name)
+                    if not vals:
+                        result[name] = info
+                        continue
+
                     if size == 1:
-                        if vals:
-                            info["min"] = min(vals)
-                            info["max"] = max(vals)
-                            info["mean"] = sum(vals) / len(vals)
-                            info["samples"] = {
-                                "indices": sample_indices,
-                                "values": [vals[i] for i in sample_indices],
-                            }
+                        mn, mx, mean, stddev = _scalar_stats(vals)
+                        info["min"] = mn
+                        info["max"] = mx
+                        info["mean"] = mean
+                        info["stddev"] = stddev
+                        info["samples"] = {
+                            "indices": sample_indices,
+                            "values": [vals[i] for i in sample_indices],
+                        }
                     else:
-                        # Vector: component-wise stats
-                        mins, maxs, means = [], [], []
+                        # Component-wise stats
+                        mins, maxs, means, stddevs = [], [], [], []
                         for c in range(size):
                             comp = vals[c::size]
-                            if comp:
-                                mins.append(min(comp))
-                                maxs.append(max(comp))
-                                means.append(sum(comp) / len(comp))
+                            mn, mx, mean, sd = _scalar_stats(comp)
+                            mins.append(mn)
+                            maxs.append(mx)
+                            means.append(mean)
+                            stddevs.append(sd)
                         info["min"] = mins
                         info["max"] = maxs
                         info["mean"] = means
+                        info["stddev"] = stddevs
                         info["samples"] = {
                             "indices": sample_indices,
                             "values": [list(vals[i * size:(i + 1) * size]) for i in sample_indices],
                         }
-
-                elif dtype in ("Int",):
-                    vals = int_fn(name)
-                    if size == 1:
-                        if vals:
-                            info["min"] = min(vals)
-                            info["max"] = max(vals)
-                            info["mean"] = sum(vals) / len(vals)
-                            info["samples"] = {
-                                "indices": sample_indices,
-                                "values": [vals[i] for i in sample_indices],
-                            }
-                    else:
-                        mins, maxs, means = [], [], []
-                        for c in range(size):
-                            comp = vals[c::size]
-                            if comp:
-                                mins.append(min(comp))
-                                maxs.append(max(comp))
-                                means.append(sum(comp) / len(comp))
-                        info["min"] = mins
-                        info["max"] = maxs
-                        info["mean"] = means
-                        info["samples"] = {
-                            "indices": sample_indices,
-                            "values": [list(vals[i * size:(i + 1) * size]) for i in sample_indices],
+                        # Magnitude stats for vectors (distance from origin)
+                        n = elem_count
+                        mag_min = float("inf")
+                        mag_max = 0.0
+                        mag_sum = 0.0
+                        mag_sq_sum = 0.0
+                        for i in range(n):
+                            sq = sum(vals[i * size + c] ** 2 for c in range(size))
+                            mag = math.sqrt(sq)
+                            if mag < mag_min:
+                                mag_min = mag
+                            if mag > mag_max:
+                                mag_max = mag
+                            mag_sum += mag
+                            mag_sq_sum += mag * mag
+                        mag_mean = mag_sum / n
+                        mag_var = mag_sq_sum / n - mag_mean ** 2
+                        info["magnitude"] = {
+                            "min": mag_min,
+                            "max": mag_max,
+                            "mean": mag_mean,
+                            "stddev": math.sqrt(max(mag_var, 0)),
                         }
 
                 elif dtype in ("String",):
@@ -516,7 +531,6 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                     from collections import Counter
                     counts = Counter(vals)
                     info["unique_count"] = len(counts)
-                    # Top 50 values by frequency
                     info["top_values"] = dict(counts.most_common(50))
                     info["samples"] = {
                         "indices": sample_indices,
@@ -556,7 +570,7 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
             class_config = {
                 "point": (geo.pointAttribs, geo.pointFloatAttribValues, geo.pointIntAttribValues, geo.pointStringAttribValues, len(geo.points())),
                 "prim": (geo.primAttribs, geo.primFloatAttribValues, geo.primIntAttribValues, geo.primStringAttribValues, len(geo.prims())),
-                "vertex": (geo.vertexAttribs, geo.vertexFloatAttribValues, geo.vertexIntAttribValues, geo.vertexStringAttribValues, len(geo.iterVertices())),
+                "vertex": (geo.vertexAttribs, geo.vertexFloatAttribValues, geo.vertexIntAttribValues, geo.vertexStringAttribValues, geo.intrinsicValue("vertexcount")),
                 "detail": (geo.globalAttribs, None, None, None, 1),
             }
             cfg = class_config.get(attrib_class)

@@ -38,6 +38,12 @@ class HoudiniClient:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            # Server returned an error status — try to read the JSON body
+            try:
+                return json.loads(e.read().decode("utf-8"))
+            except Exception:
+                raise RuntimeError(f"Houdini server error {e.code}: {e.reason}")
         except urllib.error.URLError as e:
             raise ConnectionError(
                 f"Cannot connect to Houdini at {self.base_url}. "
