@@ -12,7 +12,7 @@ _repo_root = r"C:\Users\vvox\Documents\GitHub\houdini-agent"
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-from PySide2 import QtWidgets, QtCore, QtGui
+from PySide6 import QtWidgets, QtCore, QtGui
 from bridge import server
 
 
