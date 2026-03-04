@@ -82,6 +82,14 @@ Reference material for Houdini-specific knowledge:
 
 Consult these before writing Houdini Python code.
 
+## File System & Working Directory
+
+- **This repo is a reusable toolkit** — it gets reused across many different Houdini projects. Never write project-specific files (exports, scripts, assets, caches) into this repo.
+- **`$HIP` is the project root.** The user's `$HIP` folder (where the .hip file lives) is the real working directory for the current Houdini project.
+- All project file I/O — reading scene files, exporting geometry, saving images, importing assets, writing scripts for the project — should target `$HIP` (or subdirectories of it), **not** this repo.
+- Retrieve `$HIP` at runtime: `h.query("hou.getenv('HIP')")`
+- Keep this repo clean: only commit toolkit code (bridge, skills, context docs) here.
+
 ## Key Technical Notes
 
 - The `hou` module is **not thread-safe**. All hou calls must run on Houdini's main thread.
