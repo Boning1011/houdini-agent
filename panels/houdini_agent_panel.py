@@ -83,8 +83,12 @@ class HoudiniAgentPanel(QtWidgets.QWidget):
         if server._server_instance is not None:
             self._log_msg("Server is already running.")
             return
-        # Reload module to pick up code changes from disk
-        importlib.reload(server)
+        # Reload all bridge submodules then server itself to pick up code changes
+        from bridge import main_thread
+        from bridge.handlers import exec as _h_exec, scene, parms, geometry
+        from bridge import handlers as _handlers
+        for mod in [main_thread, _h_exec, scene, parms, geometry, _handlers, server]:
+            importlib.reload(mod)
         port = self._port_spin.value()
         try:
             server.start_server(port=port)
