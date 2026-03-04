@@ -13,7 +13,8 @@ import os
 import hou
 
 # Source .pypanel file in this repo
-repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Hardcoded path — works when pasted into Houdini's Python Shell (no __file__)
+repo_root = r"C:\Users\vvox\Documents\GitHub\houdini-agent"
 src = os.path.join(repo_root, "panels", "houdini_agent.pypanel")
 
 # Houdini's user python_panels directory
