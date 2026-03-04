@@ -134,6 +134,61 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
+    def attrib_info(self, node_path):
+        """Geometry structure overview — all attribute names/types across all classes.
+
+        Returns point/prim/vertex/detail counts and attribute lists with name, type, size.
+        No values — just the structure. First call for any geometry debug.
+        """
+        resp = self._post("/attrib_info", {"path": node_path})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
+    def attrib_stats(self, node_path, attribs=None, attrib_class="point", samples=5):
+        """Value statistics for specific attributes in a class.
+
+        Returns min/max/mean for numeric attrs, unique_count/top_values for strings,
+        plus evenly-spaced sample values.
+
+        Args:
+            node_path: Path to a SOP node with geometry
+            attribs: List of attribute names, or None for all in the class
+            attrib_class: One of "point", "prim", "vertex", "detail"
+            samples: Number of evenly-spaced sample values to include (default 5, max 50)
+        """
+        body = {"path": node_path, "attrib_class": attrib_class, "samples": samples}
+        if attribs:
+            body["attribs"] = attribs
+        resp = self._post("/attrib_stats", body)
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
+    def attrib_values(self, node_path, attribs=None, attrib_class="point",
+                      start=0, count=20, stride=1, reverse=False):
+        """Read sampled attribute values from geometry.
+
+        Targeted drill-down — use attrib_info and attrib_stats first for overview.
+
+        Args:
+            node_path: Path to a SOP node with geometry
+            attribs: List of attribute names, or None for all
+            attrib_class: One of "point", "prim", "vertex", "detail"
+            start: Offset from beginning (or end if reverse)
+            count: Max elements to return (default 20, server cap 5000)
+            stride: Sample every Nth element (default 1)
+            reverse: If True, read from last element backward
+        """
+        body = {"path": node_path, "attrib_class": attrib_class,
+                "start": start, "count": count, "stride": stride, "reverse": reverse}
+        if attribs:
+            body["attribs"] = attribs
+        resp = self._post("/attrib_values", body)
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
     def create_node(self, parent, node_type, name=None):
         """Create a new node.
 

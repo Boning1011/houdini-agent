@@ -36,7 +36,10 @@ parms = h.get_parms("/obj/geo1")
 | `get_node_tree(path)` | Get node hierarchy as nested dict |
 | `get_parms(node_path)` | Get all parameters of a node |
 | `set_parms(node_path, parms)` | Set parameters on a node |
-| `get_attribs(node_path, attrib_class)` | Get geometry attributes |
+| `get_attribs(node_path, attrib_class)` | Get geometry attribute metadata (name, type, size) |
+| `attrib_info(node_path)` | Full geometry overview — all attrib names/types across all classes |
+| `attrib_stats(node_path, attribs, attrib_class, samples)` | Value stats (min/max/mean/samples) for specific attributes |
+| `attrib_values(node_path, attribs, attrib_class, start, count, stride, reverse)` | Read sampled attribute values with flexible pagination |
 | `create_node(parent, type, name)` | Create a node |
 | `delete_node(path)` | Delete a node — **requires user confirmation** |
 | `backup(directory)` | Save a timestamped .hip backup (default: `$HIP/.agent_backups/`) |

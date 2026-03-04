@@ -158,6 +158,9 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
         "/get_parms": "_handle_get_parms",
         "/set_parms": "_handle_set_parms",
         "/get_attribs": "_handle_get_attribs",
+        "/attrib_info": "_handle_attrib_info",
+        "/attrib_stats": "_handle_attrib_stats",
+        "/attrib_values": "_handle_attrib_values",
         "/create_node": "_handle_create_node",
         "/delete_node": "_handle_delete_node",
         "/scene_snapshot": "_handle_scene_snapshot",
@@ -353,6 +356,271 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                     "size": attrib.size(),
                 })
             return result
+
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
+
+    def _handle_attrib_info(self, body):
+        """Return attribute names/types across ALL classes. No values — pure structure."""
+        path = body.get("path", "")
+        if not path:
+            self._send_json({"success": False, "error": "No 'path' provided"}, 400)
+            return
+
+        def task():
+            node = hou.node(path)
+            if node is None:
+                raise ValueError(f"Node not found: {path}")
+            geo = node.geometry()
+            if geo is None:
+                raise ValueError(f"No geometry on node: {path}")
+
+            def attrib_list(attribs):
+                return [{"name": a.name(), "type": a.dataType().name(), "size": a.size()} for a in attribs]
+
+            return {
+                "point_count": len(geo.points()),
+                "prim_count": len(geo.prims()),
+                "vertex_count": len(geo.iterVertices()),
+                "point_attribs": attrib_list(geo.pointAttribs()),
+                "prim_attribs": attrib_list(geo.primAttribs()),
+                "vertex_attribs": attrib_list(geo.vertexAttribs()),
+                "detail_attribs": attrib_list(geo.globalAttribs()),
+            }
+
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
+
+    def _handle_attrib_stats(self, body):
+        """Compute stats (min/max/mean/samples) for specific attributes."""
+        path = body.get("path", "")
+        attrib_class = body.get("attrib_class", "point")
+        attrib_names = body.get("attribs", None)  # None = all
+        num_samples = min(body.get("samples", 5), 50)
+        if not path:
+            self._send_json({"success": False, "error": "No 'path' provided"}, 400)
+            return
+
+        def task():
+            node = hou.node(path)
+            if node is None:
+                raise ValueError(f"Node not found: {path}")
+            geo = node.geometry()
+            if geo is None:
+                raise ValueError(f"No geometry on node: {path}")
+
+            class_config = {
+                "point": (geo.pointAttribs, geo.pointFloatAttribValues, geo.pointIntAttribValues, geo.pointStringAttribValues, len(geo.points())),
+                "prim": (geo.primAttribs, geo.primFloatAttribValues, geo.primIntAttribValues, geo.primStringAttribValues, len(geo.prims())),
+                "vertex": (geo.vertexAttribs, geo.vertexFloatAttribValues, geo.vertexIntAttribValues, geo.vertexStringAttribValues, len(geo.iterVertices())),
+                "detail": (geo.globalAttribs, None, None, None, 1),
+            }
+            cfg = class_config.get(attrib_class)
+            if cfg is None:
+                raise ValueError(f"Invalid attrib_class: {attrib_class}. Use: point, prim, vertex, detail")
+
+            attribs_fn, float_fn, int_fn, string_fn, elem_count = cfg
+
+            # Filter to requested attribs
+            attribs = attribs_fn()
+            if attrib_names:
+                name_set = set(attrib_names)
+                attribs = [a for a in attribs if a.name() in name_set]
+
+            # Compute evenly-spaced sample indices
+            if elem_count <= num_samples:
+                sample_indices = list(range(elem_count))
+            else:
+                step = (elem_count - 1) / max(num_samples - 1, 1)
+                sample_indices = [int(round(i * step)) for i in range(num_samples)]
+
+            result = {}
+            for attrib in attribs:
+                name = attrib.name()
+                dtype = attrib.dataType().name()
+                size = attrib.size()
+                info = {"type": dtype, "size": size, "count": elem_count}
+
+                if attrib_class == "detail":
+                    # Detail: just return the value directly
+                    try:
+                        info["value"] = attrib.defaultValue() if elem_count == 0 else geo.attribValue(name)
+                    except Exception:
+                        info["value"] = None
+                    result[name] = info
+                    continue
+
+                if dtype in ("Float",):
+                    vals = float_fn(name)
+                    if size == 1:
+                        if vals:
+                            info["min"] = min(vals)
+                            info["max"] = max(vals)
+                            info["mean"] = sum(vals) / len(vals)
+                            info["samples"] = {
+                                "indices": sample_indices,
+                                "values": [vals[i] for i in sample_indices],
+                            }
+                    else:
+                        # Vector: component-wise stats
+                        mins, maxs, means = [], [], []
+                        for c in range(size):
+                            comp = vals[c::size]
+                            if comp:
+                                mins.append(min(comp))
+                                maxs.append(max(comp))
+                                means.append(sum(comp) / len(comp))
+                        info["min"] = mins
+                        info["max"] = maxs
+                        info["mean"] = means
+                        info["samples"] = {
+                            "indices": sample_indices,
+                            "values": [list(vals[i * size:(i + 1) * size]) for i in sample_indices],
+                        }
+
+                elif dtype in ("Int",):
+                    vals = int_fn(name)
+                    if size == 1:
+                        if vals:
+                            info["min"] = min(vals)
+                            info["max"] = max(vals)
+                            info["mean"] = sum(vals) / len(vals)
+                            info["samples"] = {
+                                "indices": sample_indices,
+                                "values": [vals[i] for i in sample_indices],
+                            }
+                    else:
+                        mins, maxs, means = [], [], []
+                        for c in range(size):
+                            comp = vals[c::size]
+                            if comp:
+                                mins.append(min(comp))
+                                maxs.append(max(comp))
+                                means.append(sum(comp) / len(comp))
+                        info["min"] = mins
+                        info["max"] = maxs
+                        info["mean"] = means
+                        info["samples"] = {
+                            "indices": sample_indices,
+                            "values": [list(vals[i * size:(i + 1) * size]) for i in sample_indices],
+                        }
+
+                elif dtype in ("String",):
+                    vals = string_fn(name)
+                    from collections import Counter
+                    counts = Counter(vals)
+                    info["unique_count"] = len(counts)
+                    # Top 50 values by frequency
+                    info["top_values"] = dict(counts.most_common(50))
+                    info["samples"] = {
+                        "indices": sample_indices,
+                        "values": [vals[i] for i in sample_indices],
+                    }
+
+                result[name] = info
+            return result
+
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
+
+    def _handle_attrib_values(self, body):
+        """Read sampled attribute values with flexible pagination."""
+        path = body.get("path", "")
+        attrib_class = body.get("attrib_class", "point")
+        attrib_names = body.get("attribs", None)  # None = all
+        start = body.get("start", 0)
+        count = min(body.get("count", 20), 5000)  # server cap
+        stride = max(body.get("stride", 1), 1)
+        reverse = body.get("reverse", False)
+        if not path:
+            self._send_json({"success": False, "error": "No 'path' provided"}, 400)
+            return
+
+        def task():
+            node = hou.node(path)
+            if node is None:
+                raise ValueError(f"Node not found: {path}")
+            geo = node.geometry()
+            if geo is None:
+                raise ValueError(f"No geometry on node: {path}")
+
+            class_config = {
+                "point": (geo.pointAttribs, geo.pointFloatAttribValues, geo.pointIntAttribValues, geo.pointStringAttribValues, len(geo.points())),
+                "prim": (geo.primAttribs, geo.primFloatAttribValues, geo.primIntAttribValues, geo.primStringAttribValues, len(geo.prims())),
+                "vertex": (geo.vertexAttribs, geo.vertexFloatAttribValues, geo.vertexIntAttribValues, geo.vertexStringAttribValues, len(geo.iterVertices())),
+                "detail": (geo.globalAttribs, None, None, None, 1),
+            }
+            cfg = class_config.get(attrib_class)
+            if cfg is None:
+                raise ValueError(f"Invalid attrib_class: {attrib_class}. Use: point, prim, vertex, detail")
+
+            attribs_fn, float_fn, int_fn, string_fn, total = cfg
+
+            # Filter attribs
+            attribs = attribs_fn()
+            if attrib_names:
+                name_set = set(attrib_names)
+                attribs = [a for a in attribs if a.name() in name_set]
+
+            # Compute indices
+            if reverse:
+                indices = list(range(total - 1 - start, -1, -stride))[:count]
+            else:
+                indices = list(range(start, total, stride))[:count]
+
+            if attrib_class == "detail":
+                # Detail has exactly 1 element
+                attrib_data = {}
+                for attrib in attribs:
+                    try:
+                        attrib_data[attrib.name()] = {
+                            "type": attrib.dataType().name(),
+                            "size": attrib.size(),
+                            "values": [geo.attribValue(attrib.name())],
+                        }
+                    except Exception:
+                        attrib_data[attrib.name()] = {"type": attrib.dataType().name(), "size": attrib.size(), "values": []}
+                return {"total_count": 1, "sampled_count": 1, "indices": [0], "attribs": attrib_data}
+
+            attrib_data = {}
+            for attrib in attribs:
+                name = attrib.name()
+                dtype = attrib.dataType().name()
+                size = attrib.size()
+
+                if dtype in ("Float",):
+                    vals = float_fn(name)
+                elif dtype in ("Int",):
+                    vals = int_fn(name)
+                elif dtype in ("String",):
+                    vals = string_fn(name)
+                else:
+                    continue
+
+                if dtype in ("String",):
+                    sampled = [vals[i] for i in indices]
+                elif size == 1:
+                    sampled = [vals[i] for i in indices]
+                else:
+                    sampled = [list(vals[i * size:(i + 1) * size]) for i in indices]
+
+                attrib_data[name] = {"type": dtype, "size": size, "values": sampled}
+
+            return {
+                "total_count": total,
+                "sampled_count": len(indices),
+                "indices": indices,
+                "attribs": attrib_data,
+            }
 
         r = _run_on_main_thread(task)
         if r.get("ok"):
