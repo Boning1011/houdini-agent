@@ -5,21 +5,28 @@ Runs inside Houdini as a background thread. Receives JSON requests over HTTP,
 marshals them to Houdini's main thread via hou.ui.addEventLoopCallback,
 and returns JSON responses.
 
-Usage: Execute this file in Houdini's Python Shell, or use scripts/start_server.py.
+Usage: Paste scripts/start_server.py into Houdini's Python Shell.
 """
 
 import hou
+import ast
+import io
 import json
+import sys
 import threading
 import traceback
+from contextlib import redirect_stdout
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from queue import Queue, Empty
 
 DEFAULT_PORT = 8765
 
-# Shared queue for main-thread execution
+# Shared state
 _request_queue = Queue()
 _server_instance = None
+
+# Persistent namespace for /exec — variables survive between calls
+_exec_namespace = {"hou": hou, "__builtins__": __builtins__}
 
 
 def _main_thread_processor():
@@ -29,10 +36,10 @@ def _main_thread_processor():
             task, result_holder, event = _request_queue.get_nowait()
             try:
                 result = task()
-                result_holder["status"] = "ok"
-                result_holder["result"] = result
+                result_holder["value"] = result
+                result_holder["ok"] = True
             except Exception as e:
-                result_holder["status"] = "error"
+                result_holder["ok"] = False
                 result_holder["error"] = str(e)
                 result_holder["traceback"] = traceback.format_exc()
             finally:
@@ -47,22 +54,57 @@ def _run_on_main_thread(task, timeout=30):
     event = threading.Event()
     _request_queue.put((task, result_holder, event))
     if not event.wait(timeout=timeout):
-        return {"status": "error", "error": "Timed out waiting for main thread execution"}
+        return {"ok": False, "error": "Timed out waiting for main thread execution"}
     return result_holder
+
+
+def _extract_last_expr(code):
+    """If the last statement in code is an expression, return (setup_code, expr_code).
+    Otherwise return (code, None)."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, None
+
+    if not tree.body:
+        return code, None
+
+    last = tree.body[-1]
+    if isinstance(last, ast.Expr):
+        # Split: everything before the last statement, and the last expression
+        if len(tree.body) == 1:
+            setup = ""
+        else:
+            # Get source lines for everything before the last statement
+            lines = code.split("\n")
+            setup = "\n".join(lines[: last.lineno - 1])
+        expr = ast.get_source_segment(code, last.value)
+        if expr is None:
+            # Fallback: use the line(s) of the expression
+            lines = code.split("\n")
+            expr = "\n".join(lines[last.lineno - 1 :])
+            # Strip any leading whitespace artifacts
+            expr = expr.strip()
+        return setup, expr
+
+    return code, None
 
 
 class HoudiniRequestHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the Houdini Agent bridge."""
 
     def log_message(self, format, *args):
-        # Suppress default stderr logging
-        pass
+        pass  # Suppress default stderr logging
 
     def _send_json(self, data, status_code=200):
         body = json.dumps(data, default=str).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        # CORS headers
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(body)
 
@@ -73,17 +115,21 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         return json.loads(raw)
 
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests."""
+        self._send_json({})
+
     def do_GET(self):
         if self.path == "/status":
             self._handle_status()
         else:
-            self._send_json({"status": "error", "error": f"Unknown endpoint: {self.path}"}, 404)
+            self._send_json({"success": False, "error": f"Unknown endpoint: {self.path}"}, 404)
 
     def do_POST(self):
         try:
             body = self._read_body()
         except json.JSONDecodeError as e:
-            self._send_json({"status": "error", "error": f"Invalid JSON: {e}"}, 400)
+            self._send_json({"success": False, "error": f"Invalid JSON: {e}"}, 400)
             return
 
         handlers = {
@@ -101,43 +147,82 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
         if handler:
             handler(body)
         else:
-            self._send_json({"status": "error", "error": f"Unknown endpoint: {self.path}"}, 404)
+            self._send_json({"success": False, "error": f"Unknown endpoint: {self.path}"}, 404)
 
     # --- Endpoint handlers ---
 
     def _handle_status(self):
         def task():
             return {
+                "connected": True,
                 "hip_file": hou.hipFile.path(),
+                "houdini_version": ".".join(str(x) for x in hou.applicationVersion()),
                 "fps": hou.fps(),
-                "frame": hou.frame(),
                 "frame_range": list(hou.playbar.frameRange()),
+                "current_frame": hou.frame(),
             }
-        self._send_json(_run_on_main_thread(task))
+
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json(r["value"])
+        else:
+            self._send_json({"connected": False, "error": r.get("error")}, 500)
 
     def _handle_exec(self, body):
         code = body.get("code", "")
         if not code:
-            self._send_json({"status": "error", "error": "No 'code' provided"}, 400)
+            self._send_json({"success": False, "result": None, "output": "", "error": "No 'code' provided"}, 400)
             return
 
         def task():
-            local_vars = {}
-            exec(code, {"hou": hou, "__builtins__": __builtins__}, local_vars)
-            return local_vars.get("result", None)
+            # Capture stdout
+            stdout_buf = io.StringIO()
+            result_value = None
+            error_str = None
 
-        self._send_json(_run_on_main_thread(task))
+            setup_code, expr_code = _extract_last_expr(code)
+
+            try:
+                with redirect_stdout(stdout_buf):
+                    if setup_code:
+                        exec(compile(setup_code, "<bridge>", "exec"), _exec_namespace)
+                    if expr_code:
+                        result_value = eval(compile(expr_code, "<bridge>", "eval"), _exec_namespace)
+            except Exception:
+                error_str = traceback.format_exc()
+
+            return {
+                "success": error_str is None,
+                "result": result_value,
+                "output": stdout_buf.getvalue(),
+                "error": error_str,
+            }
+
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json(r["value"])
+        else:
+            self._send_json({
+                "success": False,
+                "result": None,
+                "output": "",
+                "error": r.get("error") or r.get("traceback", "Unknown error"),
+            }, 500)
 
     def _handle_query(self, body):
         expression = body.get("expression", "")
         if not expression:
-            self._send_json({"status": "error", "error": "No 'expression' provided"}, 400)
+            self._send_json({"success": False, "error": "No 'expression' provided"}, 400)
             return
 
         def task():
             return eval(expression, {"hou": hou, "__builtins__": __builtins__})
 
-        self._send_json(_run_on_main_thread(task))
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
 
     def _handle_get_node_tree(self, body):
         path = body.get("path", "/")
@@ -149,12 +234,16 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                 raise ValueError(f"Node not found: {path}")
             return _node_to_dict(node, depth)
 
-        self._send_json(_run_on_main_thread(task))
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
 
     def _handle_get_parms(self, body):
         path = body.get("path", "")
         if not path:
-            self._send_json({"status": "error", "error": "No 'path' provided"}, 400)
+            self._send_json({"success": False, "error": "No 'path' provided"}, 400)
             return
 
         def task():
@@ -169,13 +258,17 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                     result[parm.name()] = str(parm.rawValue())
             return result
 
-        self._send_json(_run_on_main_thread(task))
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
 
     def _handle_set_parms(self, body):
         path = body.get("path", "")
         parms = body.get("parms", {})
         if not path:
-            self._send_json({"status": "error", "error": "No 'path' provided"}, 400)
+            self._send_json({"success": False, "error": "No 'path' provided"}, 400)
             return
 
         def task():
@@ -189,13 +282,17 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                 parm.set(value)
             return {"set": list(parms.keys())}
 
-        self._send_json(_run_on_main_thread(task))
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
 
     def _handle_get_attribs(self, body):
         path = body.get("path", "")
         attrib_class = body.get("attrib_class", "point")
         if not path:
-            self._send_json({"status": "error", "error": "No 'path' provided"}, 400)
+            self._send_json({"success": False, "error": "No 'path' provided"}, 400)
             return
 
         def task():
@@ -225,14 +322,18 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
                 })
             return result
 
-        self._send_json(_run_on_main_thread(task))
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
 
     def _handle_create_node(self, body):
         parent = body.get("parent", "/obj")
         node_type = body.get("type", "")
         name = body.get("name", None)
         if not node_type:
-            self._send_json({"status": "error", "error": "No 'type' provided"}, 400)
+            self._send_json({"success": False, "error": "No 'type' provided"}, 400)
             return
 
         def task():
@@ -242,12 +343,16 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
             new_node = parent_node.createNode(node_type, name)
             return {"path": new_node.path(), "type": new_node.type().name()}
 
-        self._send_json(_run_on_main_thread(task))
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
 
     def _handle_delete_node(self, body):
         path = body.get("path", "")
         if not path:
-            self._send_json({"status": "error", "error": "No 'path' provided"}, 400)
+            self._send_json({"success": False, "error": "No 'path' provided"}, 400)
             return
 
         def task():
@@ -257,7 +362,11 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
             node.destroy()
             return {"deleted": path}
 
-        self._send_json(_run_on_main_thread(task))
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
 
 
 def _node_to_dict(node, depth):
@@ -277,7 +386,7 @@ def start_server(port=DEFAULT_PORT):
     global _server_instance
 
     if _server_instance is not None:
-        print(f"[houdini-agent] Server already running.")
+        print("[houdini-agent] Server already running.")
         return
 
     server = HTTPServer(("127.0.0.1", port), HoudiniRequestHandler)
@@ -290,7 +399,8 @@ def start_server(port=DEFAULT_PORT):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    print(f"[houdini-agent] Server started on http://127.0.0.1:{port}")
+    print(f"[houdini-agent] Bridge server started on http://127.0.0.1:{port}")
+    print("[houdini-agent] Endpoints: /status, /exec, /query, /get_node_tree, /get_parms, /set_parms, /get_attribs, /create_node, /delete_node")
 
 
 def stop_server():

@@ -8,7 +8,7 @@ Usage:
     from bridge.client import HoudiniClient
     h = HoudiniClient()
     h.status()
-    h.exec_code("hou.node('/obj').createNode('geo')")
+    h.exec("hou.node('/obj').createNode('geo')")
 """
 
 import json
@@ -37,19 +37,12 @@ class HoudiniClient:
 
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
+                return json.loads(resp.read().decode("utf-8"))
         except urllib.error.URLError as e:
             raise ConnectionError(
                 f"Cannot connect to Houdini at {self.base_url}. "
                 f"Is the server running? ({e})"
             )
-
-        if result.get("status") == "error":
-            error_msg = result.get("error", "Unknown error")
-            tb = result.get("traceback", "")
-            raise RuntimeError(f"Houdini error: {error_msg}\n{tb}".strip())
-
-        return result.get("result")
 
     def _post(self, path, body):
         return self._request("POST", path, body)
@@ -60,16 +53,36 @@ class HoudiniClient:
     # --- Public API ---
 
     def status(self):
-        """Health check. Returns hip file path, fps, current frame, frame range."""
+        """Health check. Returns scene info dict with hip_file, houdini_version, fps, etc."""
         return self._get("/status")
 
-    def exec_code(self, code):
-        """Execute arbitrary Python code in Houdini's main thread.
+    def exec(self, code):
+        """Execute Python code in Houdini and return the result value.
 
-        To return a value, assign it to a variable named `result`:
-            h.exec_code("result = hou.node('/obj').children()")
+        The last expression in the code is automatically captured and returned.
+        Variables persist between calls (shared namespace).
+
+        Examples:
+            h.exec("hou.node('/obj').createNode('geo')")
+            children = h.exec("[c.path() for c in hou.node('/obj').children()]")
+        """
+        resp = self._post("/exec", {"code": code})
+        if not resp.get("success"):
+            error = resp.get("error", "Unknown error")
+            raise RuntimeError(f"Houdini error:\n{error}")
+        return resp.get("result")
+
+    def raw_exec(self, code):
+        """Execute Python code and return the full response dict.
+
+        Returns:
+            {"success": bool, "result": any, "output": str, "error": str|None}
         """
         return self._post("/exec", {"code": code})
+
+    def exec_code(self, code):
+        """Alias for exec() — backwards compatibility."""
+        return self.exec(code)
 
     def query(self, expression):
         """Evaluate a Python expression in Houdini and return the result.
@@ -78,20 +91,24 @@ class HoudiniClient:
             h.query("hou.node('/obj/geo1') is not None")  # True/False
             h.query("hou.frame()")  # current frame number
         """
-        return self._post("/query", {"expression": expression})
+        resp = self._post("/query", {"expression": expression})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
 
     def get_node_tree(self, path="/", depth=3):
-        """Get the node hierarchy as a nested dict.
-
-        Args:
-            path: Root path to start from (default: "/")
-            depth: How deep to recurse (default: 3)
-        """
-        return self._post("/get_node_tree", {"path": path, "depth": depth})
+        """Get the node hierarchy as a nested dict."""
+        resp = self._post("/get_node_tree", {"path": path, "depth": depth})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
 
     def get_parms(self, node_path):
         """Get all parameter values of a node as a dict."""
-        return self._post("/get_parms", {"path": node_path})
+        resp = self._post("/get_parms", {"path": node_path})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
 
     def set_parms(self, node_path, parms):
         """Set parameters on a node.
@@ -100,7 +117,10 @@ class HoudiniClient:
             node_path: Path to the node
             parms: Dict of {param_name: value}
         """
-        return self._post("/set_parms", {"path": node_path, "parms": parms})
+        resp = self._post("/set_parms", {"path": node_path, "parms": parms})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
 
     def get_attribs(self, node_path, attrib_class="point"):
         """Get geometry attribute info from a node.
@@ -109,7 +129,10 @@ class HoudiniClient:
             node_path: Path to a SOP node with geometry
             attrib_class: One of "point", "prim", "vertex", "detail"
         """
-        return self._post("/get_attribs", {"path": node_path, "attrib_class": attrib_class})
+        resp = self._post("/get_attribs", {"path": node_path, "attrib_class": attrib_class})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
 
     def create_node(self, parent, node_type, name=None):
         """Create a new node.
@@ -125,15 +148,17 @@ class HoudiniClient:
         body = {"parent": parent, "type": node_type}
         if name:
             body["name"] = name
-        return self._post("/create_node", body)
+        resp = self._post("/create_node", body)
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
 
     def delete_node(self, path):
-        """Delete a node. Use with caution.
-
-        Args:
-            path: Path to the node to delete
-        """
-        return self._post("/delete_node", {"path": path})
+        """Delete a node. Use with caution."""
+        resp = self._post("/delete_node", {"path": path})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
 
     def node_exists(self, path):
         """Check if a node exists at the given path."""
