@@ -160,6 +160,24 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
+    def scene_snapshot(self, path="/obj", depth=2):
+        """Get a rich snapshot of a network — nodes, connections, non-default parms, flags, errors.
+
+        One call replaces: get_node_tree + get_parms per node + connection queries.
+
+        Args:
+            path: Root network path to snapshot (default "/obj")
+            depth: How many levels deep to traverse (default 2)
+
+        Returns:
+            Dict keyed by node path, each value containing:
+            type, inputs, outputs, parms (non-default only), flags, errors, warnings
+        """
+        resp = self._post("/scene_snapshot", {"path": path, "depth": depth})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
     def node_exists(self, path):
         """Check if a node exists at the given path."""
         return self.query(f"hou.node('{path}') is not None")

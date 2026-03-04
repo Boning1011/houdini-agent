@@ -125,6 +125,19 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"success": False, "error": f"Unknown endpoint: {self.path}"}, 404)
 
+    # Single source of truth for POST endpoints — add new handlers here
+    _post_handlers = {
+        "/exec": "_handle_exec",
+        "/query": "_handle_query",
+        "/get_node_tree": "_handle_get_node_tree",
+        "/get_parms": "_handle_get_parms",
+        "/set_parms": "_handle_set_parms",
+        "/get_attribs": "_handle_get_attribs",
+        "/create_node": "_handle_create_node",
+        "/delete_node": "_handle_delete_node",
+        "/scene_snapshot": "_handle_scene_snapshot",
+    }
+
     def do_POST(self):
         try:
             body = self._read_body()
@@ -132,20 +145,9 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"success": False, "error": f"Invalid JSON: {e}"}, 400)
             return
 
-        handlers = {
-            "/exec": self._handle_exec,
-            "/query": self._handle_query,
-            "/get_node_tree": self._handle_get_node_tree,
-            "/get_parms": self._handle_get_parms,
-            "/set_parms": self._handle_set_parms,
-            "/get_attribs": self._handle_get_attribs,
-            "/create_node": self._handle_create_node,
-            "/delete_node": self._handle_delete_node,
-        }
-
-        handler = handlers.get(self.path)
-        if handler:
-            handler(body)
+        method_name = self._post_handlers.get(self.path)
+        if method_name:
+            getattr(self, method_name)(body)
         else:
             self._send_json({"success": False, "error": f"Unknown endpoint: {self.path}"}, 404)
 
@@ -349,6 +351,35 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"success": False, "error": r.get("error")}, 500)
 
+    def _handle_scene_snapshot(self, body):
+        path = body.get("path", "/obj")
+        depth = body.get("depth", 2)
+
+        def task():
+            root = hou.node(path)
+            if root is None:
+                raise ValueError(f"Node not found: {path}")
+
+            result = {}
+
+            def walk(node, d):
+                children = node.children()
+                if not children:
+                    return
+                for child in children:
+                    result[child.path()] = _snapshot_node(child)
+                    if d > 1:
+                        walk(child, d - 1)
+
+            walk(root, depth)
+            return result
+
+        r = _run_on_main_thread(task)
+        if r.get("ok"):
+            self._send_json({"success": True, "result": r["value"]})
+        else:
+            self._send_json({"success": False, "error": r.get("error")}, 500)
+
     def _handle_delete_node(self, body):
         path = body.get("path", "")
         if not path:
@@ -381,6 +412,61 @@ def _node_to_dict(node, depth):
     return info
 
 
+def _snapshot_node(node):
+    """Build a rich snapshot dict for a single node (used by /scene_snapshot)."""
+    info = {
+        "type": node.type().name(),
+        "inputs": [i.path() if i else None for i in node.inputs()],
+        "outputs": [o.path() for o in node.outputs()],
+    }
+
+    # Only non-default parameters — dramatically reduces noise
+    changed_parms = {}
+    for p in node.parms():
+        try:
+            if not p.isAtDefault():
+                changed_parms[p.name()] = p.eval()
+        except Exception:
+            pass
+    if changed_parms:
+        info["parms"] = changed_parms
+
+    # Flags — only include what the node type supports
+    flags = {}
+    if hasattr(node, "isDisplayFlagSet"):
+        try:
+            flags["display"] = node.isDisplayFlagSet()
+        except Exception:
+            pass
+    if hasattr(node, "isRenderFlagSet"):
+        try:
+            flags["render"] = node.isRenderFlagSet()
+        except Exception:
+            pass
+    try:
+        flags["bypass"] = node.isBypassed()
+    except Exception:
+        pass
+    if flags:
+        info["flags"] = flags
+
+    # Errors and warnings — only if present
+    try:
+        errs = node.errors()
+        if errs:
+            info["errors"] = errs
+    except Exception:
+        pass
+    try:
+        warns = node.warnings()
+        if warns:
+            info["warnings"] = warns
+    except Exception:
+        pass
+
+    return info
+
+
 def start_server(port=DEFAULT_PORT):
     """Start the Houdini Agent bridge server."""
     global _server_instance
@@ -400,7 +486,9 @@ def start_server(port=DEFAULT_PORT):
     thread.start()
 
     print(f"[houdini-agent] Bridge server started on http://127.0.0.1:{port}")
-    print("[houdini-agent] Endpoints: /status, /exec, /query, /get_node_tree, /get_parms, /set_parms, /get_attribs, /create_node, /delete_node")
+    # Derive endpoint list from the handler — stays in sync automatically
+    endpoints = ["/status"] + list(HoudiniRequestHandler._post_handlers.keys())
+    print(f"[houdini-agent] Endpoints: {', '.join(endpoints)}")
 
 
 def stop_server():
