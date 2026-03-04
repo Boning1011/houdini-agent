@@ -220,11 +220,12 @@ import os, glob as _glob
 _hip_path = hou.hipFile.path()
 _hip_dir = os.path.dirname(_hip_path)
 _backup_dir = {dir_repr} or os.path.join(_hip_dir, ".agent_backups")
-if not os.path.isdir(_backup_dir):
-    []
-else:
+if os.path.isdir(_backup_dir):
     _files = _glob.glob(os.path.join(_backup_dir, "*.hip"))
-    sorted(_files, key=os.path.getmtime, reverse=True)
+    _result = sorted(_files, key=os.path.getmtime, reverse=True)
+else:
+    _result = []
+_result
 """
         return self.exec(code)
 
