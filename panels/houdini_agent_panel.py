@@ -6,6 +6,7 @@ This runs inside Houdini and directly imports bridge.server (no HTTP needed).
 """
 
 import sys
+import importlib
 
 # Ensure repo root is on sys.path so bridge can be imported
 _repo_root = r"C:\Users\vvox\Documents\GitHub\houdini-agent"
@@ -82,10 +83,12 @@ class HoudiniAgentPanel(QtWidgets.QWidget):
         if server._server_instance is not None:
             self._log_msg("Server is already running.")
             return
+        # Reload module to pick up code changes from disk
+        importlib.reload(server)
         port = self._port_spin.value()
         try:
             server.start_server(port=port)
-            self._log_msg(f"Server started on port {port}.")
+            self._log_msg(f"Server started on port {port} (reloaded).")
         except Exception as e:
             self._log_msg(f"Failed to start: {e}")
         self._update_status()
