@@ -35,13 +35,10 @@ _MAX_LOG_SIZE = 200
 
 
 def _with_undo(label, func):
-    """Wrap func in a Houdini undo block. Returns a new callable."""
+    """Wrap func in a Houdini undo group. Returns a new callable."""
     def wrapped():
-        hou.undos.beginBlock(label)
-        try:
+        with hou.undos.group(label):
             return func()
-        finally:
-            hou.undos.endBlock()
     return wrapped
 
 
