@@ -239,6 +239,19 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
+    def ui_state(self):
+        """Get what the user is currently looking at.
+
+        Returns dict with:
+        - selected_nodes: list of selected node paths
+        - network_editor_path: current network editor location
+        - current_frame: current timeline frame
+        """
+        resp = self._post("/ui_state", {})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
     def node_exists(self, path):
         """Check if a node exists at the given path."""
         return self.query(f"hou.node('{path}') is not None")

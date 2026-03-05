@@ -115,6 +115,33 @@ def handle_scene_snapshot(body):
     return {"success": False, "error": r.get("error")}, 500
 
 
+def handle_ui_state(_body):
+    """Return what the user is currently looking at: network editor path, selected nodes, etc."""
+    def task():
+        result = {}
+
+        # Selected nodes
+        result["selected_nodes"] = [n.path() for n in hou.selectedNodes()]
+
+        # Network editor current path
+        try:
+            ne = hou.ui.paneTabOfType(hou.paneTabType.NetworkEditor)
+            if ne:
+                result["network_editor_path"] = ne.pwd().path()
+        except Exception:
+            pass
+
+        # Current frame for context
+        result["current_frame"] = hou.frame()
+
+        return result
+
+    r = _run_on_main_thread(task)
+    if r.get("ok"):
+        return {"success": True, "result": r["value"]}, 200
+    return {"success": False, "error": r.get("error")}, 500
+
+
 def handle_undo_history(body):
     """Return the operation log."""
     limit = body.get("limit", 50)

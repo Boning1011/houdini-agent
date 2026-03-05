@@ -40,6 +40,7 @@ parms = h.get_parms("/obj/geo1")
 | `attrib_info(node_path)` | Full geometry overview — all attrib names/types across all classes |
 | `attrib_stats(node_path, attribs, attrib_class, samples)` | Value stats (min/max/mean/samples) for specific attributes |
 | `attrib_values(node_path, attribs, attrib_class, start, count, stride, reverse)` | Read sampled attribute values with flexible pagination |
+| `ui_state()` | What the user sees: selected nodes, network editor path, current frame |
 | `create_node(parent, type, name)` | Create a node |
 | `delete_node(path)` | Delete a node — **requires user confirmation** |
 | `backup(directory)` | Save a timestamped .hip backup (default: `$HIP/.agent_backups/`) |
