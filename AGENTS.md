@@ -31,6 +31,13 @@ h.exec("node.parm('tx').set(5)", verify=["/obj/geo1"])
 
 # Capture viewport screenshot (returns path, then Read it to see the image)
 img = h.screenshot()           # → {"path": "...", "width": 1280, "height": 720}
+
+# Batch: multiple ops in one round-trip, one undo group
+h.batch([
+    {"code": "geo = hou.node('/obj').createNode('geo', 'my_geo')"},
+    {"code": "hou.node('/obj/my_geo').createNode('box')"},
+    {"code": "hou.node('/obj/my_geo').layoutChildren()", "verify": ["/obj/my_geo"]},
+])
 ```
 
 ## Bridge API
@@ -39,6 +46,7 @@ img = h.screenshot()           # → {"path": "...", "width": 1280, "height": 72
 |---|---|
 | `status()` | Health check — returns server info |
 | `exec(code, verify=[...])` | Execute Python in Houdini; optionally verify node health after |
+| `batch(ops, stop_on_error)` | Execute multiple code snippets in one round-trip (single undo group) |
 | `query(expression)` | Evaluate a Python expression and return the result |
 | `get_node_tree(path)` | Get node hierarchy as nested dict |
 | `get_parms(node_path)` | Get all parameters of a node |
@@ -78,6 +86,7 @@ img = h.screenshot()           # → {"path": "...", "width": 1280, "height": 72
 - Inspect scene state before making changes (observe → reason → act)
 - Use `verify=[node_paths]` on `exec()` to get post-execution health checks (errors, geo counts, parms) in one round-trip
 - Use `screenshot()` after visual changes, then `Read` the image file to verify the result visually
+- Use `batch()` for multi-step operations (create + wire + set parms) — one round-trip, one undo group, faster iteration
 
 ## Skills
 

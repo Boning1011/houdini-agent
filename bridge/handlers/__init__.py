@@ -5,7 +5,7 @@ Each handler has the signature:
     handle(body: dict) -> (response_dict, status_code)
 """
 
-from bridge.handlers.exec import handle_exec, handle_query
+from bridge.handlers.exec import handle_exec, handle_batch, handle_query
 from bridge.handlers.scene import (
     handle_status,
     handle_get_node_tree,
@@ -27,6 +27,7 @@ from bridge.handlers.viewport import handle_screenshot
 # Endpoint -> handler function.  Add new endpoints here.
 POST_HANDLERS = {
     "/exec":           handle_exec,
+    "/batch":          handle_batch,
     "/query":          handle_query,
     "/get_node_tree":  handle_get_node_tree,
     "/get_parms":      handle_get_parms,

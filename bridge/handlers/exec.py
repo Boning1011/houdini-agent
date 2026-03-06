@@ -160,6 +160,61 @@ def handle_exec(body):
     }, 500
 
 
+def handle_batch(body):
+    """Execute multiple code snippets in a single main-thread dispatch.
+
+    Body:
+        ops: list of {code: str, verify?: [node_paths]}
+        stop_on_error: bool (default True) — abort remaining ops on first failure
+    """
+    ops = body.get("ops", [])
+    stop_on_error = body.get("stop_on_error", True)
+    if not ops:
+        return {"success": False, "error": "No 'ops' provided"}, 400
+
+    def task():
+        results = []
+        for op in ops:
+            code = op.get("code", "")
+            verify_paths = op.get("verify", None)
+            stdout_buf = io.StringIO()
+            result_value = None
+            error_str = None
+
+            setup_code, expr_code = _extract_last_expr(code)
+            try:
+                with redirect_stdout(stdout_buf):
+                    if setup_code:
+                        exec(compile(setup_code, "<bridge>", "exec"), _exec_namespace)
+                    if expr_code:
+                        result_value = eval(compile(expr_code, "<bridge>", "eval"), _exec_namespace)
+            except Exception:
+                error_str = traceback.format_exc()
+
+            entry = {
+                "success": error_str is None,
+                "result": result_value,
+                "output": stdout_buf.getvalue(),
+                "error": error_str,
+            }
+            if verify_paths:
+                entry["verify"] = _verify_nodes(verify_paths)
+
+            results.append(entry)
+
+            if error_str and stop_on_error:
+                break
+
+        return results
+
+    label = f"Agent: batch ({len(ops)} ops)"
+    r = _run_on_main_thread(_with_undo(label, task))
+    _log_operation("/batch", label, r.get("ok", False))
+    if r.get("ok"):
+        return {"success": True, "results": r["value"]}, 200
+    return {"success": False, "error": r.get("error") or r.get("traceback", "Unknown error")}, 500
+
+
 def handle_query(body):
     """Evaluate a Python expression and return the result."""
     import hou

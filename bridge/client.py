@@ -101,6 +101,32 @@ class HoudiniClient:
             body["verify"] = verify
         return self._post("/exec", body)
 
+    def batch(self, ops, stop_on_error=True):
+        """Execute multiple code snippets in one round-trip.
+
+        All ops run in a single main-thread dispatch and one undo group.
+
+        Args:
+            ops: List of dicts, each with:
+                - code (str): Python code to execute
+                - verify (list[str], optional): node paths to inspect after this op
+            stop_on_error: If True (default), stop on first failure.
+
+        Returns:
+            List of result dicts, one per op (same format as raw_exec).
+
+        Example:
+            h.batch([
+                {"code": "hou.node('/obj').createNode('geo', 'my_geo')"},
+                {"code": "hou.node('/obj/my_geo').createNode('box')"},
+                {"code": "hou.node('/obj/my_geo').layoutChildren()"},
+            ])
+        """
+        resp = self._post("/batch", {"ops": ops, "stop_on_error": stop_on_error})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("results")
+
     def exec_code(self, code, verify=None):
         """Alias for exec() — backwards compatibility."""
         return self.exec(code, verify=verify)
