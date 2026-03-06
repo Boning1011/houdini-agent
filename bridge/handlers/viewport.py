@@ -38,14 +38,10 @@ def handle_screenshot(body):
             ts = time.strftime("%Y%m%d_%H%M%S")
             path = os.path.join(tmp_dir, f"viewport_{ts}.png")
 
-        # Configure flipbook settings for a single-frame capture
-        settings = viewer.flipbookSettings().stash()
-        settings.frameRange((hou.frame(), hou.frame()))
-        settings.resolution((width, height))
-        settings.output(path)
-
-        # Capture
-        viewer.flipbook(viewer.curViewport(), settings)
+        # Capture directly from the OpenGL viewport (no MPlay popup)
+        viewport = viewer.curViewport()
+        image = viewport.saveAsImage(width, height)
+        image.saveTo(path)
 
         return {"path": path, "width": width, "height": height}
 
