@@ -107,6 +107,8 @@ Reference material for Houdini-specific knowledge:
 - `context/houdini-python.md` — hou module patterns, thread safety, common gotchas
 - `context/usd-patterns.md` — USD/LOPs workflows
 - `context/kinefx-patterns.md` — KineFX reference
+- `context/hda-development.md` — HDA parm templates, PythonModule callbacks, rig pose mapping
+- `context/operation-patterns.md` — scene reading strategy, VEX gotchas, undo API, context retrieval
 
 Consult these before writing Houdini Python code.
 
