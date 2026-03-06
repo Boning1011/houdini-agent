@@ -88,6 +88,20 @@ h.batch([
 - Use `screenshot()` after visual changes, then `Read` the image file to verify the result visually
 - Use `batch()` for multi-step operations (create + wire + set parms) — one round-trip, one undo group, faster iteration
 
+## Quick Actions — Zero Hesitation Patterns
+
+These are pre-resolved patterns. When the trigger matches, execute immediately — no searching, no reading source files.
+
+**"Look at / check / see the viewport"** → Screenshot + analyze:
+```bash
+python -c "import sys; sys.path.insert(0, '.'); from bridge.client import HoudiniClient; r = HoudiniClient().screenshot(width=1920, height=1080); print(r['path'])"
+```
+Run this from the repo root, then `Read` the returned image path to view and analyze it. Do both in one go.
+
+**"What's in the scene / what nodes exist"** → `h.ui_state()` + `h.get_node_tree("/obj")`
+
+**"Run this in Houdini"** → `h.exec(code)` or `h.query(expr)` directly.
+
 ## Skills
 
 Skills live in `skills/`. Each skill is a directory with:
