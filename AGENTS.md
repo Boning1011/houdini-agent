@@ -88,6 +88,18 @@ h.batch([
 - Use `screenshot()` after visual changes, then `Read` the image file to verify the result visually
 - Use `batch()` for multi-step operations (create + wire + set parms) — one round-trip, one undo group, faster iteration
 
+## Context First — Read Before You Answer
+
+Before answering any Houdini-related question or writing Houdini Python code, **read the relevant `context/` docs first**. Do not answer from memory alone.
+
+- HDA questions → read `context/hda-development.md`
+- Scene operations, VEX, undo → read `context/operation-patterns.md`
+- USD/LOPs → read `context/usd-patterns.md`
+- KineFX → read `context/kinefx-patterns.md`
+- hou module, thread safety → read `context/houdini-python.md`
+
+If unsure which doc is relevant, scan all of them. The cost of reading a file is near zero; the cost of a wrong answer is high.
+
 ## Quick Actions — Zero Hesitation
 
 When the user asks you to "look at", "check", or "see" something, act immediately using the Bridge API above. Do not search the codebase for how to call these methods — just use them directly. You have vision: capture a screenshot, read the image, and respond.
