@@ -29,7 +29,9 @@ def handle_screenshot(body):
         # Determine output path
         if output_path:
             path = output_path
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
         else:
             tmp_dir = os.path.join(tempfile.gettempdir(), "houdini_agent")
             os.makedirs(tmp_dir, exist_ok=True)

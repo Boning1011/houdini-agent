@@ -2,7 +2,6 @@
 
 import ast
 import io
-import math
 import traceback
 from contextlib import redirect_stdout
 
