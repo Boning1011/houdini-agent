@@ -1,11 +1,11 @@
-# Houdini Agent — Instructions for Claude Code
+# Houdini Agent — Instructions for AI Coding Agents
 
-This repo is a toolkit for AI-controlled Houdini operations. You (Claude Code) use the bridge layer to observe, reason about, and act on Houdini scenes.
+This repo is a toolkit for AI-controlled Houdini operations. You (the AI agent) use the bridge layer to observe, reason about, and act on Houdini scenes.
 
 ## Architecture
 
 ```
-Claude Code (VS Code terminal)
+AI Agent (VS Code terminal / CLI)
     ↕ HTTP JSON
 bridge/server.py (runs inside Houdini)
     ↕ hou module
