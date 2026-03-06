@@ -2,9 +2,11 @@
 
 import ast
 import io
+import math
 import traceback
 from contextlib import redirect_stdout
 
+import hou
 from bridge.main_thread import (
     _run_on_main_thread,
     _with_undo,
@@ -40,9 +42,80 @@ def _extract_last_expr(code):
     return code, None
 
 
+def _verify_nodes(node_paths):
+    """Collect health info for a list of node paths. Runs on main thread."""
+    result = {}
+    for path in node_paths:
+        node = hou.node(path)
+        if node is None:
+            result[path] = {"exists": False}
+            continue
+
+        info = {"exists": True, "type": node.type().name()}
+
+        # Errors and warnings
+        try:
+            errs = node.errors()
+            if errs:
+                info["errors"] = errs
+        except Exception:
+            pass
+        try:
+            warns = node.warnings()
+            if warns:
+                info["warnings"] = warns
+        except Exception:
+            pass
+
+        # Cook time
+        try:
+            info["cook_time"] = node.cookTime()
+        except Exception:
+            pass
+
+        # Non-default parms (compact)
+        changed = {}
+        for p in node.parms():
+            try:
+                if not p.isAtDefault():
+                    changed[p.name()] = p.eval()
+            except Exception:
+                pass
+        if changed:
+            info["parms"] = changed
+
+        # Geometry summary (if SOP)
+        try:
+            geo = node.geometry()
+            if geo is not None:
+                geo_info = {
+                    "points": len(geo.points()),
+                    "prims": len(geo.prims()),
+                    "vertices": geo.intrinsicValue("vertexcount"),
+                }
+                # Bounding box
+                try:
+                    bbox = geo.boundingBox()
+                    geo_info["bbox_min"] = list(bbox.minvec())
+                    geo_info["bbox_max"] = list(bbox.maxvec())
+                except Exception:
+                    pass
+                info["geo"] = geo_info
+        except Exception:
+            pass
+
+        result[path] = info
+    return result
+
+
 def handle_exec(body):
-    """Execute arbitrary Python in Houdini's main thread."""
+    """Execute arbitrary Python in Houdini's main thread.
+
+    Optional body fields:
+        verify: list of node paths to inspect after execution.
+    """
     code = body.get("code", "")
+    verify_paths = body.get("verify", None)
     if not code:
         return {"success": False, "result": None, "output": "", "error": "No 'code' provided"}, 400
 
@@ -61,12 +134,18 @@ def handle_exec(body):
         except Exception:
             error_str = traceback.format_exc()
 
-        return {
+        resp = {
             "success": error_str is None,
             "result": result_value,
             "output": stdout_buf.getvalue(),
             "error": error_str,
         }
+
+        # Post-exec verification
+        if verify_paths:
+            resp["verify"] = _verify_nodes(verify_paths)
+
+        return resp
 
     label = f"Agent: exec {code[:50]}"
     r = _run_on_main_thread(_with_undo(label, task))

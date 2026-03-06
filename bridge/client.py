@@ -62,33 +62,48 @@ class HoudiniClient:
         """Health check. Returns scene info dict with hip_file, houdini_version, fps, etc."""
         return self._get("/status")
 
-    def exec(self, code):
+    def exec(self, code, verify=None):
         """Execute Python code in Houdini and return the result value.
 
         The last expression in the code is automatically captured and returned.
         Variables persist between calls (shared namespace).
 
+        Args:
+            code: Python code to execute.
+            verify: Optional list of node paths to inspect after execution.
+                    When provided, returns a dict with "result" and "verify" keys
+                    instead of just the result value.
+
         Examples:
             h.exec("hou.node('/obj').createNode('geo')")
-            children = h.exec("[c.path() for c in hou.node('/obj').children()]")
+            h.exec("node.parm('tx').set(5)", verify=["/obj/geo1"])
         """
-        resp = self._post("/exec", {"code": code})
+        body = {"code": code}
+        if verify:
+            body["verify"] = verify
+        resp = self._post("/exec", body)
         if not resp.get("success"):
             error = resp.get("error", "Unknown error")
             raise RuntimeError(f"Houdini error:\n{error}")
+        if verify:
+            return {"result": resp.get("result"), "verify": resp.get("verify", {})}
         return resp.get("result")
 
-    def raw_exec(self, code):
+    def raw_exec(self, code, verify=None):
         """Execute Python code and return the full response dict.
 
         Returns:
-            {"success": bool, "result": any, "output": str, "error": str|None}
+            {"success": bool, "result": any, "output": str, "error": str|None,
+             "verify": dict|None}
         """
-        return self._post("/exec", {"code": code})
+        body = {"code": code}
+        if verify:
+            body["verify"] = verify
+        return self._post("/exec", body)
 
-    def exec_code(self, code):
+    def exec_code(self, code, verify=None):
         """Alias for exec() — backwards compatibility."""
-        return self.exec(code)
+        return self.exec(code, verify=verify)
 
     def query(self, expression):
         """Evaluate a Python expression in Houdini and return the result.
@@ -248,6 +263,25 @@ class HoudiniClient:
         - current_frame: current timeline frame
         """
         resp = self._post("/ui_state", {})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
+    def screenshot(self, output=None, width=1280, height=720):
+        """Capture the current viewport as an image.
+
+        Args:
+            output: File path to save the image (default: auto temp file).
+            width: Image width in pixels (default 1280).
+            height: Image height in pixels (default 720).
+
+        Returns:
+            Dict with "path", "width", "height" of the saved image.
+        """
+        body = {"width": width, "height": height}
+        if output:
+            body["output"] = output
+        resp = self._post("/screenshot", body)
         if not resp.get("success"):
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")

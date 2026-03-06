@@ -22,6 +22,7 @@ from bridge.handlers.geometry import (
     handle_attrib_stats,
     handle_attrib_values,
 )
+from bridge.handlers.viewport import handle_screenshot
 
 # Endpoint -> handler function.  Add new endpoints here.
 POST_HANDLERS = {
@@ -37,6 +38,7 @@ POST_HANDLERS = {
     "/create_node":    handle_create_node,
     "/delete_node":    handle_delete_node,
     "/scene_snapshot": handle_scene_snapshot,
+    "/screenshot":     handle_screenshot,
     "/ui_state":       handle_ui_state,
     "/undo_history":   handle_undo_history,
 }

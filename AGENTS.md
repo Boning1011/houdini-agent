@@ -21,9 +21,16 @@ Houdini Scene
 from bridge.client import HoudiniClient
 h = HoudiniClient()            # connects to localhost:8765
 h.status()                     # health check
-h.exec_code("hou.node('/obj').createNode('geo')")
+h.exec("hou.node('/obj').createNode('geo')")
 tree = h.get_node_tree("/obj")
 parms = h.get_parms("/obj/geo1")
+
+# Execute with post-exec verification
+h.exec("node.parm('tx').set(5)", verify=["/obj/geo1"])
+# → {"result": None, "verify": {"/obj/geo1": {errors, geo, parms, cook_time}}}
+
+# Capture viewport screenshot (returns path, then Read it to see the image)
+img = h.screenshot()           # → {"path": "...", "width": 1280, "height": 720}
 ```
 
 ## Bridge API
@@ -31,7 +38,7 @@ parms = h.get_parms("/obj/geo1")
 | Method | Description |
 |---|---|
 | `status()` | Health check — returns server info |
-| `exec_code(code)` | Execute arbitrary Python in Houdini's main thread |
+| `exec(code, verify=[...])` | Execute Python in Houdini; optionally verify node health after |
 | `query(expression)` | Evaluate a Python expression and return the result |
 | `get_node_tree(path)` | Get node hierarchy as nested dict |
 | `get_parms(node_path)` | Get all parameters of a node |
@@ -41,6 +48,7 @@ parms = h.get_parms("/obj/geo1")
 | `attrib_stats(node_path, attribs, attrib_class, samples)` | Value stats (min/max/mean/samples) for specific attributes |
 | `attrib_values(node_path, attribs, attrib_class, start, count, stride, reverse)` | Read sampled attribute values with flexible pagination |
 | `ui_state()` | What the user sees: selected nodes, network editor path, current frame |
+| `screenshot(output, width, height)` | Capture viewport as PNG — returns file path you can `Read` to see the image |
 | `create_node(parent, type, name)` | Create a node |
 | `delete_node(path)` | Delete a node — **requires user confirmation** |
 | `backup(directory)` | Save a timestamped .hip backup (default: `$HIP/.agent_backups/`) |
@@ -68,6 +76,8 @@ parms = h.get_parms("/obj/geo1")
 - Check node existence before modifying (`h.query(f"hou.node('{path}') is not None")`)
 - Wrap risky operations in try/except via exec_code
 - Inspect scene state before making changes (observe → reason → act)
+- Use `verify=[node_paths]` on `exec()` to get post-execution health checks (errors, geo counts, parms) in one round-trip
+- Use `screenshot()` after visual changes, then `Read` the image file to verify the result visually
 
 ## Skills
 
