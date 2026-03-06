@@ -80,6 +80,7 @@ h.batch([
 - Any operation that could destroy existing work
 
 **Always:**
+- **After saving/updating any HDA**, commit and push the `.hda`/`.hdalc` file to its git repo (see `context/hda-development.md` "Auto Git Commit & Push"). This is mandatory — every HDA save must be versioned.
 - **Start every task with `h.ui_state()`** — know what the user is looking at (selected nodes, network editor path) before doing anything. Use the selection and current network as context for ambiguous requests.
 - Check node existence before modifying (`h.query(f"hou.node('{path}') is not None")`)
 - Wrap risky operations in try/except via exec_code
