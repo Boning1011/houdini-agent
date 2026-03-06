@@ -293,20 +293,24 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
-    def screenshot(self, output=None, width=1280, height=720):
+    def screenshot(self, output=None, width=None, height=None):
         """Capture the current viewport as an image.
 
         Args:
             output: File path to save the image (default: auto temp file).
-            width: Image width in pixels (default 1280).
-            height: Image height in pixels (default 720).
+            width: Image width in pixels (default: native viewport width).
+            height: Image height in pixels (default: native viewport height).
 
         Returns:
             Dict with "path", "width", "height" of the saved image.
         """
-        body = {"width": width, "height": height}
+        body = {}
         if output:
             body["output"] = output
+        if width:
+            body["width"] = width
+        if height:
+            body["height"] = height
         resp = self._post("/screenshot", body)
         if not resp.get("success"):
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")

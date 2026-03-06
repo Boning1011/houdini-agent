@@ -13,12 +13,12 @@ def handle_screenshot(body):
 
     Optional body fields:
         output: file path to save the image (default: temp file).
-        width: image width in pixels (default: 1280).
-        height: image height in pixels (default: 720).
+        width: image width in pixels (default: native viewport width).
+        height: image height in pixels (default: native viewport height).
     """
     output_path = body.get("output", None)
-    width = body.get("width", 1280)
-    height = body.get("height", 720)
+    width = body.get("width", None)
+    height = body.get("height", None)
 
     def task():
         # Find the scene viewer
@@ -38,12 +38,22 @@ def handle_screenshot(body):
             ts = time.strftime("%Y%m%d_%H%M%S")
             path = os.path.join(tmp_dir, f"viewport_{ts}.png")
 
-        # Capture directly from the OpenGL viewport (no MPlay popup)
+        # Use native viewport resolution if not specified
         viewport = viewer.curViewport()
-        image = viewport.saveAsImage(width, height)
-        image.saveTo(path)
+        vp_size = viewport.size()
+        w = width or (vp_size[2] - vp_size[0])
+        h = height or (vp_size[3] - vp_size[1])
 
-        return {"path": path, "width": width, "height": height}
+        # Flipbook single frame with MPlay suppressed
+        settings = viewer.flipbookSettings().stash()
+        settings.frameRange((hou.frame(), hou.frame()))
+        settings.resolution((w, h))
+        settings.output(path)
+        settings.outputToMPlay(False)
+
+        viewer.flipbook(viewport, settings)
+
+        return {"path": path, "width": w, "height": h}
 
     r = _run_on_main_thread(task)
     if r.get("ok"):

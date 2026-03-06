@@ -94,7 +94,7 @@ These are pre-resolved patterns. When the trigger matches, execute immediately â
 
 **"Look at / check / see the viewport"** â†’ Screenshot + analyze:
 ```bash
-python -c "import sys; sys.path.insert(0, '.'); from bridge.client import HoudiniClient; r = HoudiniClient().screenshot(width=1920, height=1080); print(r['path'])"
+python -c "import sys; sys.path.insert(0, '.'); from bridge.client import HoudiniClient; r = HoudiniClient().screenshot(); print(r['path'])"
 ```
 Run this from the repo root, then `Read` the returned image path to view and analyze it. Do both in one go.
 
