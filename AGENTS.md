@@ -49,10 +49,11 @@ h.batch([
 | `batch(ops, stop_on_error)` | Execute multiple code snippets in one round-trip (single undo group) |
 | `query(expression)` | Evaluate a Python expression and return the result |
 | `get_node_tree(path)` | Get node hierarchy as nested dict |
+| `scene_snapshot(path, depth)` | Rich snapshot — nodes, connections, non-default parms, flags, errors |
+| `node_info(node_path)` or `node_info(paths=[...])` | Full node info (MMB popup) — cook time, geo counts, attribs, memory, bbox. Batch mode for multiple nodes in one round-trip |
 | `get_parms(node_path)` | Get all parameters of a node |
 | `set_parms(node_path, parms)` | Set parameters on a node |
-| `get_attribs(node_path, attrib_class)` | Get geometry attribute metadata (name, type, size) |
-| `attrib_info(node_path)` | Full geometry overview — all attrib names/types across all classes |
+| `attrib_info(node_path)` or `attrib_info(paths=[...])` | Geometry overview — counts + attrib names/types. Batch mode for multiple nodes in one round-trip |
 | `attrib_stats(node_path, attribs, attrib_class, samples)` | Value stats (min/max/mean/samples) for specific attributes |
 | `attrib_values(node_path, attribs, attrib_class, start, count, stride, reverse)` | Read sampled attribute values with flexible pagination |
 | `ui_state()` | What the user sees: selected nodes, network editor path, current frame |
@@ -63,6 +64,36 @@ h.batch([
 | `list_backups(directory)` | List available .hip backups, newest first |
 | `restore_backup(path)` | Load a .hip backup — **requires user confirmation** |
 | `undo_history(limit)` | Get log of agent's mutating operations |
+
+## Progressive Inspection — Don't Over-Fetch
+
+Scene data has three levels of detail. Use the minimum level needed — don't jump to level 3 when level 1 suffices.
+
+**Level 1 — Network overview** (use once at task start):
+```python
+h.ui_state()                                    # where is the user?
+h.scene_snapshot("/obj/geo1", depth=1)           # all nodes: types, connections, non-default parms, flags
+```
+This is like looking at the node network. `scene_snapshot` returns ~400 bytes/node. Don't call it repeatedly after every edit — use `exec(..., verify=[paths])` for post-edit checks on specific nodes.
+
+**Level 2 — Single node detail** (when debugging a specific node):
+```python
+h.node_info("/obj/geo1/scatter1")                # MMB popup: cook time, geo counts, attrib list, memory, bbox
+h.node_info(paths=["/obj/geo1/box1", "/obj/geo1/scatter1"])  # batch: multiple nodes, one round-trip
+```
+This is like pressing MMB on a node. Use it when you need to understand *what a node produced* — not for every node in the network.
+
+**Level 3 — Data values** (when you need the actual numbers):
+```python
+h.attrib_info("/obj/geo1/scatter1")              # structure: counts + attrib names/types (no values)
+h.attrib_stats("/obj/geo1/scatter1", ["P", "N"]) # stats: min/max/mean + samples
+h.attrib_values("/obj/geo1/scatter1", ["P"])      # raw values with pagination
+```
+
+**Avoid redundant calls:**
+- `node_info` already includes attrib names, types, and counts (in its SOP Info branch). If you just called `node_info`, don't also call `attrib_info` on the same node — the attribute list is the same. Only use `attrib_info` when you need the programmatic dict format without the rest of the MMB info, or in batch mode to scan multiple nodes at once.
+- `scene_snapshot` already includes non-default parms. Don't follow up with `get_parms` unless you specifically need default parameter values too.
+- When verifying an edit, use `exec(..., verify=[paths])` — it returns errors, geo counts, and cook time in the same round-trip. Don't re-snapshot the entire network.
 
 ## Safety Rules
 

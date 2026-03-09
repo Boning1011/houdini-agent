@@ -73,17 +73,19 @@ def handle_get_attribs(body):
 
 
 def handle_attrib_info(body):
-    """Full geometry overview — all attrib names/types across all classes."""
-    path = body.get("path", "")
-    if not path:
-        return {"success": False, "error": "No 'path' provided"}, 400
+    """Full geometry overview — all attrib names/types across all classes.
 
-    def task():
-        geo = _get_geo(path)
+    Accepts either "path" (single node) or "paths" (list of node paths).
+    Returns a dict keyed by node path when using "paths", or a flat dict for "path".
+    """
+    paths = body.get("paths", None)
+    single_path = body.get("path", "")
+    if not paths and not single_path:
+        return {"success": False, "error": "No 'path' or 'paths' provided"}, 400
 
+    def _build_info(geo):
         def attrib_list(attribs):
             return [{"name": a.name(), "type": a.dataType().name(), "size": a.size()} for a in attribs]
-
         return {
             "point_count": len(geo.points()),
             "prim_count": len(geo.prims()),
@@ -93,6 +95,21 @@ def handle_attrib_info(body):
             "vertex_attribs": attrib_list(geo.vertexAttribs()),
             "detail_attribs": attrib_list(geo.globalAttribs()),
         }
+
+    if paths:
+        def task():
+            result = {}
+            for p in paths:
+                try:
+                    geo = _get_geo(p)
+                    result[p] = _build_info(geo)
+                except Exception as e:
+                    result[p] = {"error": str(e)}
+            return result
+    else:
+        def task():
+            geo = _get_geo(single_path)
+            return _build_info(geo)
 
     r = _run_on_main_thread(task)
     if r.get("ok"):

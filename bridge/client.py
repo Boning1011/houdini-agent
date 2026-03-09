@@ -181,13 +181,28 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
-    def attrib_info(self, node_path):
+    def attrib_info(self, node_path=None, paths=None):
         """Geometry structure overview — all attribute names/types across all classes.
 
         Returns point/prim/vertex/detail counts and attribute lists with name, type, size.
-        No values — just the structure. First call for any geometry debug.
+        No values — just the structure.
+
+        Args:
+            node_path: Path to a single SOP node
+            paths: List of SOP node paths (batch mode — one round-trip for all)
+
+        Returns:
+            Single node: flat info dict.
+            Batch (paths): dict keyed by node path.
         """
-        resp = self._post("/attrib_info", {"path": node_path})
+        body = {}
+        if paths:
+            body["paths"] = paths
+        elif node_path:
+            body["path"] = node_path
+        else:
+            raise ValueError("Provide either node_path or paths")
+        resp = self._post("/attrib_info", body)
         if not resp.get("success"):
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
@@ -316,19 +331,30 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
-    def node_info(self, node_path, verbose=False, output_index=0):
+    def node_info(self, node_path=None, paths=None, verbose=False, output_index=0):
         """Get the full node info tree (equivalent to MMB popup).
 
-        Use this to inspect a specific node in detail — cook time, geometry
-        counts, attribute lists, memory, bbox, etc.  Content varies by context
+        Use this to inspect nodes in detail — cook time, geometry counts,
+        attribute lists, memory, bbox, etc.  Content varies by context
         (SOP/LOP/OBJ/DOP).
 
         Args:
-            node_path: Path to the node
+            node_path: Path to a single node
+            paths: List of node paths (batch mode — one round-trip for all)
             verbose: Include extra detail (may be slower)
             output_index: Which output to query for multi-output nodes
+
+        Returns:
+            Single node: flat info dict.
+            Batch (paths): dict keyed by node path.
         """
-        body = {"path": node_path, "verbose": verbose, "output_index": output_index}
+        body = {"verbose": verbose, "output_index": output_index}
+        if paths:
+            body["paths"] = paths
+        elif node_path:
+            body["path"] = node_path
+        else:
+            raise ValueError("Provide either node_path or paths")
         resp = self._post("/node_info", body)
         if not resp.get("success"):
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")

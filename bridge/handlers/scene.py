@@ -143,19 +143,36 @@ def handle_ui_state(_body):
 
 
 def handle_node_info(body):
-    """Return the full infoTree for a single node (equivalent to MMB popup)."""
-    path = body.get("path", "")
-    if not path:
-        return {"success": False, "error": "No 'path' provided"}, 400
+    """Return the full infoTree for one or more nodes (equivalent to MMB popup).
+
+    Accepts either "path" (single node) or "paths" (list of node paths).
+    Returns a dict keyed by node path when using "paths", or a flat dict for "path".
+    """
+    paths = body.get("paths", None)
+    single_path = body.get("path", "")
+    if not paths and not single_path:
+        return {"success": False, "error": "No 'path' or 'paths' provided"}, 400
     verbose = body.get("verbose", False)
     output_index = body.get("output_index", 0)
 
-    def task():
-        node = hou.node(path)
-        if node is None:
-            raise ValueError(f"Node not found: {path}")
-        tree = node.infoTree(verbose=verbose, output_index=output_index)
-        return _info_tree_to_dict(tree)
+    if paths:
+        def task():
+            result = {}
+            for p in paths:
+                node = hou.node(p)
+                if node is None:
+                    result[p] = {"error": f"Node not found: {p}"}
+                    continue
+                tree = node.infoTree(verbose=verbose, output_index=output_index)
+                result[p] = _info_tree_to_dict(tree)
+            return result
+    else:
+        def task():
+            node = hou.node(single_path)
+            if node is None:
+                raise ValueError(f"Node not found: {single_path}")
+            tree = node.infoTree(verbose=verbose, output_index=output_index)
+            return _info_tree_to_dict(tree)
 
     r = _run_on_main_thread(task)
     if r.get("ok"):
