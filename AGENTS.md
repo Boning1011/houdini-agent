@@ -165,6 +165,24 @@ Consult these before writing Houdini Python code.
 - Retrieve `$HIP` at runtime: `h.query("hou.getenv('HIP')")`
 - Keep this repo clean: only commit toolkit code (bridge, skills, context docs) here.
 
+## Session Reflection — Self-Evolution Loop
+
+After completing significant work (multi-step Houdini tasks, debugging sessions, HDA development), write a reflection to `reflections/YYYY-MM-DD-brief-topic.md`. See `reflections/_TEMPLATE.md` for the format.
+
+**When to reflect:**
+- After any session where you hit friction, made detours, or discovered something new
+- When the user explicitly asks
+- At the end of a long session with 3+ distinct tasks
+
+**What makes a good reflection:**
+- The **Toolkit Improvement Opportunities** section is the most important — it's what drives actual changes to the codebase
+- Be brutally specific in **Waste Analysis** — name exact API calls, count round-trips, estimate context cost
+- **Critical Path** should be a reproducible recipe: "if I had to redo this from scratch, here's the minimum steps"
+
+**What to do with reflections:**
+- Reflections accumulate in `reflections/`. Periodically, the user (or agent) reviews them in batch to identify recurring friction and prioritize toolkit improvements.
+- If a pattern appears in 2+ reflections, it should become a concrete change: a new context doc, a skill, an API improvement, or an AGENTS.md update.
+
 ## Key Technical Notes
 
 - The `hou` module is **not thread-safe**. All hou calls must run on Houdini's main thread.
