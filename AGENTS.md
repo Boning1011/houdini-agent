@@ -90,7 +90,7 @@ h.attrib_info(paths=["/obj/geo1/box1", "/obj/geo1/scatter1"])  # batch: scan mul
 h.attrib_stats("/obj/geo1/scatter1", ["P", "N"]) # stats: min/max/mean + samples
 h.attrib_values("/obj/geo1/scatter1", ["P"])      # raw values with pagination
 ```
-`attrib_info` is essential before writing VEX or Python that references attributes — you need to know exact names, types, and which class they belong to (especially string attributes). This is the Geometry Spreadsheet equivalent.
+This is the Geometry Spreadsheet equivalent — use it when you need to know exact attribute names, types, and which class they belong to.
 
 **Avoid redundant calls:**
 - `scene_snapshot` already includes non-default parms. Don't follow up with `get_parms` unless you specifically need default parameter values too.
