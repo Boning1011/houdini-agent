@@ -10,50 +10,35 @@
 
 ## Critical Path
 
-1. `h.query(children)` on `/obj/EXAMPLES/risograph` — get full node list
-2. `h.get_parms` on the HDA itself — get user-facing parameter interface
-3. `h.get_parms` on `weight_calculation` → read `kernelcode` field — the core algorithm
+What would have been sufficient:
+
+1. `h.scene_snapshot("/obj/EXAMPLES/risograph", depth=1)` — all nodes, types, connections in one call
+2. `h.get_parms` on the HDA itself — user-facing parameter interface
+3. `h.get_parms` on `weight_calculation` → extract `kernelcode` — the core algorithm
 4. `h.get_parms` on `Add_all_layers`, `Add_all_weights`, `offset_order` — supporting kernels
-5. `h.get_parms` on palette constant nodes (`Black`, `Red`, etc.) with `f3r/f3g/f3b` — ink colors
-6. `h.query` on palette null nodes (`Classic`, `Vibrant`, etc.) inputs — palette compositions
-7. Trace output chain: `outputs` ← `switch2` ← `rgbatorgb3` ← `switch6` ← `over3/over4` ← `Add_all_layers` ← `multiply` nodes
-8. `h.get_parms` on `km_converter` internal OpenCL nodes — the KM color science
+5. `h.get_parms` on a few palette constant nodes — check `signature`, then read the matching parm prefix
+6. `h.get_parms` on `km_converter` internal OpenCL nodes — KM color science
 
-That's 8 queries for the full understanding. In practice it took ~15.
+6 queries. In practice it took ~15.
 
-## Waste Analysis
+## Friction Log
 
-| Pattern | Estimated Waste | Why It Happened |
-|---------|----------------|-----------------|
-| Tried `parm("source").eval()` for OpenCL code | 1 round-trip | Wrong parm name — COP OpenCL nodes store code in `kernelcode`, not `source`. Should have used `get_parms` first to discover parm names |
-| Read palette colors with `f4r/f4g/f4b` (got all 1.0) | 1 round-trip | COP constant nodes with `signature=f3` use `f3r/f3g/f3b`, not `f4r`. Had to query again with correct parm names |
-| `switch_palette` query returned 60KB output | 1 wasted round-trip + context | Queried `maxNumInputs()` which returned ~256 slots for a switch node. Should have used a fixed small range (e.g., 10) since palettes only have 5-6 entries |
-| Multiple separate queries tracing node connections | ~5 extra round-trips | Traced the data flow one node at a time: `outputs` → `switch2` → `rgbatorgb3` → `switch6` → etc. Could have done batch tracing in a single `exec_code` call |
-| Tried `inputConnectors()[i].label()` (again) | 1 round-trip | Already learned in the earlier session that H21 COP `inputConnectors()` returns tuples. Repeated the same mistake |
+| What was attempted | What happened | Cost |
+|---|---|---|
+| `parm("source").eval()` on OpenCL node | KeyError — parm doesn't exist. Actual parm name is `kernelcode` | 1 round-trip |
+| `get_parms` on OpenCL node to get kernel code | Got ~4KB response — mostly binding/option metadata, only ~1KB was actual kernel code | Context waste |
+| Read palette colors with `f4r/f4g/f4b` on constant node | All returned 1.0 — wrong parm prefix. Node has `signature=f3`, so parms are `f3r/f3g/f3b` | 1 round-trip |
+| `maxNumInputs()` on switch_palette node | Returned ~256 — generated 60KB of output iterating over empty slots | 1 round-trip + context |
+| Traced output chain one node at a time via `query()` | Took ~5 separate calls: `outputs` → `switch2` → `rgbatorgb3` → `switch6` → etc. | ~5 round-trips |
+| `inputConnectors()[i].label()` on COP node | AttributeError — tuples, not objects. Same mistake as MotionCops session | 1 round-trip |
 
-## Toolkit Improvement Opportunities
+Note: `scene_snapshot` already existed and returns `inputs`/`outputs` for every node. The connection tracing (~5 round-trips) could have been avoided entirely by snapshotting the network and traversing the dict client-side.
 
-- **API — `trace_flow(node_path, direction='upstream', depth=N)`**: The most time-consuming part was manually tracing connections node-by-node. A single call that returns the full upstream or downstream graph (as a dict of `{node: [inputs]}`) would have replaced ~8 queries with 1
-- **API — `get_opencl_code(node_path)`**: OpenCL nodes store their kernel in `kernelcode` parm. A convenience method that extracts just the code (stripping the massive binding/option parms) would save context window — the full `get_parms` on an OpenCL node returns ~4KB of binding metadata alongside ~1KB of actual kernel code
-- **Docs/AGENTS.md**: Document COP constant node signature conventions: `signature=f3` → use `f3r/f3g/f3b`; `signature=f4` → use `f4r/f4g/f4b/f4a`; `signature=auto` → check which parms exist. This came up twice across two sessions
-- **Docs/AGENTS.md**: Document that COP `switch` nodes have `maxNumInputs()` of ~256. Always use a bounded range when querying inputs (e.g., `range(10)` with None filtering), never use `maxNumInputs()`
-- **API — `get_graph(network_path)`**: Return all nodes with their types, positions, and connections in one call. Would have replaced the initial `children()` query + all the connection tracing with a single response
+## Observations
 
-## Patterns Worth Remembering
-
-- **OpenCL parm name is `kernelcode`**, not `source` — this is the COP OpenCL node convention in H21
-- **COP constant signature determines parm prefix**: `f3` → `f3r/f3g/f3b`; `f4` → `f4r/f4g/f4b/f4a`; `f1` → `f1` (scalar)
-- **Batch connection tracing via exec_code**: Instead of querying connections one node at a time, write a single Python script that walks the graph and returns the full connectivity map. Example pattern:
-  ```python
-  h.exec_code('''
-  visited = {}
-  def trace(node, depth=0):
-      if depth > 10 or node.path() in visited: return
-      inputs = [(node.input(i).name() if node.input(i) else None) for i in range(min(len(node.inputConnectors()), 10))]
-      visited[node.path()] = inputs
-      for i, inp in enumerate(inputs):
-          if inp: trace(node.input(i), depth+1)
-  trace(hou.node("/obj/EXAMPLES/risograph/outputs"))
-  ''', 'visited')
-  ```
-- **Background research agent is effective**: Launching a web research agent in parallel while doing HDA exploration saved wall-clock time. The research finished by the time the HDA analysis was complete, and the two streams of information complemented each other well for writing
+- COP OpenCL nodes store kernel code in `kernelcode` parm, not `source`
+- COP constant node `signature` determines parm prefix: `f3` → `f3r/f3g/f3b`; `f4` → `f4r/f4g/f4b/f4a`; `f1` → `f1`
+- COP switch nodes report `maxNumInputs()` ≈ 256 regardless of actual connected inputs — must use bounded iteration (e.g., `range(10)`)
+- `get_parms` on OpenCL nodes returns extensive binding metadata alongside the actual kernel code
+- `scene_snapshot` returns `inputs` and `outputs` for every node — sufficient for full connection tracing without additional queries
+- H21 COP `inputConnectors()` returns tuples, not objects — this was encountered in both sessions

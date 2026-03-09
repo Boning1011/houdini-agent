@@ -1,32 +1,30 @@
 # Session Reflection — [DATE] — [BRIEF TOPIC]
 
 ## What Was Done
-<!-- 3-5 bullet points, each one sentence. What were the actual tasks accomplished? -->
+<!-- 3-5 bullet points. Factual: what tasks were completed. -->
 
 - ...
 
 ## Critical Path
-<!-- Which operations actually mattered? Strip away all the exploration and dead ends — what's the minimum sequence of actions that would have achieved the same result? -->
+<!-- The minimum sequence of operations that actually mattered. If the real session took detours, note both: what was done vs what would have been sufficient. -->
 
 1. ...
 
-## Waste Analysis
-<!-- What consumed context window / round-trips without contributing to the outcome? Be specific: name the API calls, the patterns, the detours. -->
+## Friction Log
+<!-- Objective record of what went wrong or took extra effort. Focus on WHAT HAPPENED, not why or what should be done differently. Let the facts speak for themselves.
 
-| Pattern | Estimated Waste | Why It Happened |
-|---------|----------------|-----------------|
-| e.g., "Called scene_snapshot 4x after each small edit" | ~3 round-trips | Should have used verify= instead |
-| e.g., "Read context/hda-development.md twice" | ~context | Already had the info from first read |
+Each entry should include:
+- What was attempted (the actual API call or action)
+- What happened (error message, unexpected return value, crash)
+- How many round-trips it cost
+-->
 
-## Toolkit Improvement Opportunities
-<!-- The key section. What changes to the bridge API, client, AGENTS.md, context docs, or skills would have made this session more efficient? Be concrete. -->
+| What was attempted | What happened | Cost |
+|---|---|---|
+| e.g., `parm("source").eval()` on OpenCL node | KeyError — parm doesn't exist, actual name is `kernelcode` | 1 round-trip |
+| e.g., batch-created 12 HDA nodes in one script | Houdini crashed — NAS dependency loading overwhelmed main thread | Lost entire session |
 
-- **API**: ...
-- **Docs/AGENTS.md**: ...
-- **New skill candidate**: ...
-- **Context doc gap**: ...
-
-## Patterns Worth Remembering
-<!-- Any reusable techniques, Houdini gotchas, or workflow patterns discovered. If significant enough, these should migrate to context/ docs. -->
+## Observations
+<!-- Factual things learned about Houdini, the API, or the codebase. No recommendations — just "X works like Y" or "X does not work as expected". These are candidates for migration to context/ docs. -->
 
 - ...
