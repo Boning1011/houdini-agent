@@ -100,6 +100,7 @@ img = h.screenshot()               # → {"path": "...", "width": 1280, "height"
 |---|---|
 | `get_node_tree(path, depth)` | Node hierarchy as nested dict |
 | `scene_snapshot(path, depth)` | Rich snapshot — nodes, connections, non-default parms, flags, errors |
+| `node_info(node_path, verbose, output_index)` | Full node info tree (MMB popup) — cook time, geo counts, attribs, memory, bbox |
 | `create_node(parent, type, name)` | Create a node |
 | `delete_node(path)` | Delete a node |
 | `node_exists(path)` | Check if a node exists |

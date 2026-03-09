@@ -316,6 +316,24 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
+    def node_info(self, node_path, verbose=False, output_index=0):
+        """Get the full node info tree (equivalent to MMB popup).
+
+        Use this to inspect a specific node in detail — cook time, geometry
+        counts, attribute lists, memory, bbox, etc.  Content varies by context
+        (SOP/LOP/OBJ/DOP).
+
+        Args:
+            node_path: Path to the node
+            verbose: Include extra detail (may be slower)
+            output_index: Which output to query for multi-output nodes
+        """
+        body = {"path": node_path, "verbose": verbose, "output_index": output_index}
+        resp = self._post("/node_info", body)
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
     def node_exists(self, path):
         """Check if a node exists at the given path."""
         return self.query(f"hou.node('{path}') is not None")

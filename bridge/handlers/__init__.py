@@ -13,6 +13,7 @@ from bridge.handlers.scene import (
     handle_delete_node,
     handle_scene_snapshot,
     handle_ui_state,
+    handle_node_info,
     handle_undo_history,
 )
 from bridge.handlers.parms import handle_get_parms, handle_set_parms
@@ -41,5 +42,6 @@ POST_HANDLERS = {
     "/scene_snapshot": handle_scene_snapshot,
     "/screenshot":     handle_screenshot,
     "/ui_state":       handle_ui_state,
+    "/node_info":      handle_node_info,
     "/undo_history":   handle_undo_history,
 }

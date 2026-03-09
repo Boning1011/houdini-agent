@@ -142,6 +142,27 @@ def handle_ui_state(_body):
     return {"success": False, "error": r.get("error")}, 500
 
 
+def handle_node_info(body):
+    """Return the full infoTree for a single node (equivalent to MMB popup)."""
+    path = body.get("path", "")
+    if not path:
+        return {"success": False, "error": "No 'path' provided"}, 400
+    verbose = body.get("verbose", False)
+    output_index = body.get("output_index", 0)
+
+    def task():
+        node = hou.node(path)
+        if node is None:
+            raise ValueError(f"Node not found: {path}")
+        tree = node.infoTree(verbose=verbose, output_index=output_index)
+        return _info_tree_to_dict(tree)
+
+    r = _run_on_main_thread(task)
+    if r.get("ok"):
+        return {"success": True, "result": r["value"]}, 200
+    return {"success": False, "error": r.get("error")}, 500
+
+
 def handle_undo_history(body):
     """Return the operation log."""
     limit = body.get("limit", 50)
@@ -151,6 +172,16 @@ def handle_undo_history(body):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _info_tree_to_dict(tree):
+    """Recursively convert a hou.NodeInfoTree to a plain dict."""
+    d = {}
+    if tree.rows():
+        d["rows"] = [list(r) for r in tree.rows()]
+    for name in tree.branchOrder():
+        d[name] = _info_tree_to_dict(tree.branches()[name])
+    return d
+
 
 def _node_to_dict(node, depth):
     """Recursively convert a node to a dictionary representation."""
