@@ -2,6 +2,24 @@
 
 A toolkit that lets AI agents (Claude Code) control SideFX Houdini from the outside via a Python bridge.
 
+## The Thinking Behind This
+
+I've been using Houdini for over eight years. It's the most powerful tool I have, and also the one where I spend the most time on work that requires expertise but not necessarily human judgment — debugging VEX, tracing attribute flows, navigating deep node graphs to find where something went wrong.
+
+When coding agents got good enough to hold context across real multi-step tasks, I realized: Houdini is a visual programming environment built on Python. Give an agent access to that Python layer with enough context about how Houdini works, and it can handle a surprising amount of the execution while I focus on the decisions.
+
+That's what this is. Not a demo — a production tool I use every day.
+
+### Design choices
+
+**Thin, general interface.** The bridge is a few hundred lines marshalling `hou` calls over HTTP. The agent writes Python directly, the same way I would in Houdini's Python Shell. I chose not to wrap common operations into specialized endpoints because Houdini's power comes from composability — any fixed workflow I pre-build becomes a constraint the moment I need something different. Instead, structured endpoints handle *reading* (scene snapshots, geometry inspection, node info), while *writing* is `exec()` and `batch()` with the full expressiveness of the `hou` module. This design gets more useful over time without changes: as agents get better at reasoning, this same thin interface lets them do more.
+
+**Context over code.** Instead of hard-coding Houdini knowledge into the bridge, I keep it in plain Markdown files (`context/`). Eight years of "here's how you actually do this" — VEX patterns, HDA conventions, KineFX workflows — in a form the agent can read before acting. When Houdini changes or I learn a better pattern, I update a text file, not the codebase.
+
+**Built to last.** HTTP, JSON, Python, undo blocks. No framework dependencies, no abstractions that might not age well. The less there is to break, the longer it lasts. I want to still be using this a year from now, through Houdini upgrades and whatever the next generation of agents looks like.
+
+---
+
 ## How It Works
 
 ```
