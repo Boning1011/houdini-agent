@@ -9,7 +9,8 @@ import sys
 import importlib
 
 # Ensure repo root is on sys.path so bridge can be imported
-_repo_root = r"C:\Users\vvox\Documents\GitHub\houdini-agent"
+import os
+_repo_root = os.environ.get("HOUDINI_AGENT_ROOT") or os.path.dirname(os.path.dirname(__file__))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 

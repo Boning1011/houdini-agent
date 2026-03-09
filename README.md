@@ -14,6 +14,29 @@ Houdini Scene
 
 A lightweight HTTP server runs inside Houdini. An external Python client sends commands and queries over JSON. The server marshals all calls to Houdini's main thread for thread safety. All mutating operations are wrapped in `hou.undos` blocks — the user can **Ctrl+Z** to undo agent actions.
 
+## Setup
+
+All scripts and panels locate the repo via the **`HOUDINI_AGENT_ROOT`** environment variable. Set it once and everything works — no hardcoded paths.
+
+### Option 1: Houdini Package (recommended for teams)
+
+Create a package JSON in `~/Documents/houdiniX.X/packages/` (e.g. `houdini_agent.json`):
+
+```json
+{
+    "env": [
+        { "HOUDINI_AGENT_ROOT": "C:/path/to/houdini-agent" }
+    ],
+    "path": "$HOUDINI_AGENT_ROOT"
+}
+```
+
+This sets the env var automatically when Houdini launches and works across all team machines (each with their own package file pointing to their local clone).
+
+### Option 2: System environment variable
+
+Set `HOUDINI_AGENT_ROOT` in your OS environment (Windows: System Properties > Environment Variables, or your shell profile). Houdini will inherit it on launch.
+
 ## Quick Start
 
 ### Option A: Python Panel (recommended)
@@ -31,8 +54,6 @@ The panel provides Start/Stop controls, port config, status display, and a live 
 
 In Houdini's Python Shell:
 ```python
-import sys
-sys.path.insert(0, r"C:\path\to\houdini-agent")  # adjust path
 from bridge.server import start_server
 start_server()
 ```

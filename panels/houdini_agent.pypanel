@@ -2,13 +2,19 @@
 <pythonPanelDocument>
   <interface name="houdini_agent" label="Houdini Agent" icon="MISC_python" help_url="">
     <script><![CDATA[
-import sys
+import sys, os
 
-_repo_root = r"C:\Users\vvox\Documents\GitHub\houdini-agent"
+_repo_root = os.environ.get("HOUDINI_AGENT_ROOT")
+if not _repo_root:
+    raise RuntimeError(
+        "HOUDINI_AGENT_ROOT is not set. "
+        "Add it to your Houdini package JSON or set it before launching Houdini. "
+        "See the houdini-agent README for setup instructions."
+    )
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-_panels_dir = _repo_root + r"\panels"
+_panels_dir = os.path.join(_repo_root, "panels")
 if _panels_dir not in sys.path:
     sys.path.insert(0, _panels_dir)
 

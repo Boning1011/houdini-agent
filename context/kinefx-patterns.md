@@ -1,3 +1,4 @@
+<!-- houdini_version: 21.0 -->
 # KineFX Patterns — Reference
 
 ## Overview

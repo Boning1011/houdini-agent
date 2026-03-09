@@ -13,8 +13,15 @@ import os
 import hou
 
 # Source .pypanel file in this repo
-# Hardcoded path — works when pasted into Houdini's Python Shell (no __file__)
-repo_root = r"C:\Users\vvox\Documents\GitHub\houdini-agent"
+# Uses HOUDINI_AGENT_ROOT env var, or prompts user to set it
+repo_root = os.environ.get("HOUDINI_AGENT_ROOT")
+if not repo_root:
+    raise RuntimeError(
+        "HOUDINI_AGENT_ROOT is not set. "
+        "Set it in your Houdini package JSON or run:\n"
+        "  import os; os.environ['HOUDINI_AGENT_ROOT'] = r'C:\\path\\to\\houdini-agent'\n"
+        "before running this script."
+    )
 src = os.path.join(repo_root, "panels", "houdini_agent.pypanel")
 
 # Houdini's user python_panels directory

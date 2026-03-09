@@ -1,3 +1,4 @@
+<!-- houdini_version: 21.0 -->
 # HDA Development Patterns
 
 Lessons learned from programmatically creating/modifying HDAs via the bridge.

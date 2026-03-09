@@ -1,3 +1,4 @@
+<!-- houdini_version: 21.0 -->
 # Houdini Operation Patterns
 
 ## Reading Complex Houdini Scenes — Reverse Tracing

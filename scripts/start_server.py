@@ -1,8 +1,16 @@
 # Paste this into Houdini's Python Shell to start the bridge server.
-# Edit the path below to point to your houdini-agent repo root.
+# Requires HOUDINI_AGENT_ROOT env var (set via Houdini package JSON).
 
 import sys
-REPO_ROOT = r"C:\Users\vvox\Documents\GitHub\houdini-agent"  # <-- edit this
+import os
+REPO_ROOT = os.environ.get("HOUDINI_AGENT_ROOT")
+if not REPO_ROOT:
+    raise RuntimeError(
+        "HOUDINI_AGENT_ROOT is not set. "
+        "Set it in your Houdini package JSON or run:\n"
+        "  import os; os.environ['HOUDINI_AGENT_ROOT'] = r'C:\\path\\to\\houdini-agent'\n"
+        "before running this script."
+    )
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 

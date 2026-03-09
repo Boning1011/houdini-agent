@@ -1,3 +1,4 @@
+<!-- houdini_version: 21.0 -->
 # Houdini Python (hou module) — Reference
 
 ## Thread Safety
