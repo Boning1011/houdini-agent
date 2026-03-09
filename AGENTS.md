@@ -83,15 +83,16 @@ h.node_info(paths=["/obj/geo1/box1", "/obj/geo1/scatter1"])  # batch: multiple n
 ```
 This is like pressing MMB on a node. Use it when you need to understand *what a node produced* — not for every node in the network.
 
-**Level 3 — Data values** (when you need the actual numbers):
+**Level 3 — Geometry data** (when you need to understand attributes for writing VEX/Python):
 ```python
-h.attrib_info("/obj/geo1/scatter1")              # structure: counts + attrib names/types (no values)
+h.attrib_info("/obj/geo1/scatter1")              # structure: counts + attrib names/types/sizes (programmatic dict)
+h.attrib_info(paths=["/obj/geo1/box1", "/obj/geo1/scatter1"])  # batch: scan multiple nodes in one round-trip
 h.attrib_stats("/obj/geo1/scatter1", ["P", "N"]) # stats: min/max/mean + samples
 h.attrib_values("/obj/geo1/scatter1", ["P"])      # raw values with pagination
 ```
+`attrib_info` is essential before writing VEX or Python that references attributes — you need to know exact names, types, and which class they belong to (especially string attributes). This is the Geometry Spreadsheet equivalent.
 
 **Avoid redundant calls:**
-- `node_info` already includes attrib names, types, and counts (in its SOP Info branch). If you just called `node_info`, don't also call `attrib_info` on the same node — the attribute list is the same. Only use `attrib_info` when you need the programmatic dict format without the rest of the MMB info, or in batch mode to scan multiple nodes at once.
 - `scene_snapshot` already includes non-default parms. Don't follow up with `get_parms` unless you specifically need default parameter values too.
 - When verifying an edit, use `exec(..., verify=[paths])` — it returns errors, geo counts, and cook time in the same round-trip. Don't re-snapshot the entire network.
 
