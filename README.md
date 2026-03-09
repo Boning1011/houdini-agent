@@ -1,6 +1,6 @@
 # Houdini Agent
 
-A toolkit that lets AI agents (Claude Code) control SideFX Houdini from the outside via a Python bridge.
+A toolkit that lets AI coding agents control SideFX Houdini from the outside via a zero-dependency Python bridge.
 
 ## The Thinking Behind This
 
@@ -10,13 +10,22 @@ When coding agents got good enough to hold context across real multi-step tasks,
 
 That's what this is. Not a demo — a production tool I use every day.
 
-### Design choices
+### Design philosophy
 
-**Thin, general interface.** The bridge is a few hundred lines marshalling `hou` calls over HTTP. The agent writes Python directly, the same way I would in Houdini's Python Shell. I chose not to wrap common operations into specialized endpoints because Houdini's power comes from composability — any fixed workflow I pre-build becomes a constraint the moment I need something different. Instead, structured endpoints handle *reading* (scene snapshots, geometry inspection, node info), while *writing* is `exec()` and `batch()` with the full expressiveness of the `hou` module. This design gets more useful over time without changes: as agents get better at reasoning, this same thin interface lets them do more.
+The bridge follows two rules:
 
-**Context over code.** Instead of hard-coding Houdini knowledge into the bridge, I keep it in plain Markdown files (`context/`). Eight years of "here's how you actually do this" — VEX patterns, HDA conventions, KineFX workflows — in a form the agent can read before acting. When Houdini changes or I learn a better pattern, I update a text file, not the codebase.
+1. **If the agent can figure it out, let it.** Coding agents already search docs, manage context, plan multi-step tasks, and recover from errors. Rebuilding any of that inside the bridge is wasted effort that ages poorly. No built-in LLM client, no memory system, no document indexing — the agent brings all of that.
+2. **If it takes years of experience to know, write it down.** If you've used Houdini for 5, 10, 15 years, you carry knowledge the docs never teach — which approach actually holds up in production, which "correct" solution falls apart at scale, what to reach for when a scene breaks in ways you've seen before. That kind of experience compresses into a few Markdown files (`context/`), not dozens of specialized tool endpoints. When Houdini changes or a better pattern emerges, you update a text file, not the codebase.
 
-**Built to last.** HTTP, JSON, Python, undo blocks. No framework dependencies, no abstractions that might not age well. The less there is to break, the longer it lasts. I want to still be using this a year from now, through Houdini upgrades and whatever the next generation of agents looks like.
+This means the bridge is deliberately small: ~1,800 lines, zero external dependencies, and only two core write operations (`exec` and `batch`). Everything else is reading helpers that reduce round-trips. The agent writes Python directly against the `hou` module — no preset workflows to constrain it, no specialized tool library to maintain. As agents get smarter, this same thin interface lets them do more, without code changes.
+
+### Agent-agnostic
+
+The instructions live in `AGENTS.md` — a plain Markdown file that any coding agent can read. Claude Code, Codex, Gemini CLI, or whatever comes next. No SDK integration, no API adapters. Supporting a new agent means pointing it at the same file.
+
+### Built to last
+
+HTTP, JSON, Python, `hou.undos`. No framework dependencies, no abstractions that might not age well. The entire bridge runs on Python's standard library and Houdini's built-in `hou` module. The less there is to break, the longer it lasts.
 
 ---
 
