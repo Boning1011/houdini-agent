@@ -81,6 +81,18 @@ Skeleton SOP → Configure Joints → Rig Stash Pose (rest pose)
 Skeleton → IK Chains (select root/tip, set solver) → Rig Pose (set IK targets)
 ```
 
+### Attach Control Shapes
+```
+[Control SOP] → [Attrib Wrangle: s@name="ctrl_name"] → Merge
+                                                          ↓ (input 1)
+Skeleton (input 0) → Attach Control Geo → Rig Pose
+```
+- `control` SOP creates packed circle/box/null shapes. `controltype`: `circles`, `box`, `nullandcircles`, etc.
+- `kinefx::attachcontrolgeo` matches controls by **`name` prim attribute** on the control geo (input 1). The `control` SOP does NOT set this — must add it manually via attribwrangle (class=primitive).
+- Multiparm `controls` maps `group#` (point group on skeleton, e.g. `@name=joint_1`) to `controlname#` (matching the `name` prim attribute on control geo).
+- Attached controls appear as PackedGeometry prims in the `kinefx_controls` prim group.
+- Controls become interactive when the downstream `rigpose` viewer state is active (select node → Enter in viewport).
+
 ## Gotchas
 
 1. **Matrix ordering**: Houdini uses row-major matrices. `localtransform` is 16 floats in row-major order.
@@ -88,3 +100,5 @@ Skeleton → IK Chains (select root/tip, set solver) → Rig Pose (set IK target
 3. **Point order matters**: The skeleton hierarchy relies on point numbers and polyline connectivity. Don't sort or shuffle points.
 4. **Name attribute**: Joint names must be unique for proper capture/deform.
 5. **Transform vs localtransform**: `transform` is world-space (computed from hierarchy), `localtransform` is parent-relative (what you typically edit).
+6. **Zero transforms break IK**: If the `transform` 3x3 matrix is all zeros (not identity), `fullbodyik` produces NaN output. `rigstashpose` can reset transforms to zero — verify transforms are valid before IK.
+7. **`attachcontrolgeo` needs `name` prim attrib**: The `control` SOP only sets `P` and `Cd`. Without a `name` prim attribute on the control geo, the `kinefx_controls` group will be empty (zero controls attached).
