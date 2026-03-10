@@ -58,9 +58,36 @@ From a `scene_snapshot`, identify blocks by data flow structure:
 4. **Side branches** — isolated subgraphs connected at one point (e.g., rig controls branch)
 5. **Orphans** — nodes with no connections to any output chain (experimental/abandoned)
 
+## Avoiding Wire Overlap
+
+When a connection crosses a vertical chain of nodes, the wire visually overlaps the nodes it passes through. This is the most common readability problem in Houdini networks.
+
+**Prevention (preferred over dots):** Stagger branch nodes horizontally so wires route around vertical chains instead of through them. When a node splits into two branches (e.g., `null8` → `blast5` + `blast6`), don't just offset ±1.5 — offset enough that the downstream converge point's incoming wire clears the adjacent column entirely.
+
+```
+# BAD: branches too close, wires cross through the vertical chain
+#   null8           ParametricCurve
+#   / \                  |
+# blast5 blast6     transform
+#   |                    |
+#   ...             orientalong    ← wire from here to attribcopy crosses through blast5's chain
+#
+# BETTER: wider stagger, wire routes clear of vertical nodes
+#   null8                    ParametricCurve
+#   /    \                        |
+# blast5  blast6            transform
+# (x-3)  (x+2)                   |
+```
+
+**Dots as last resort:** `hou.NetworkDot` (Alt+click on a wire in the UI) can redirect wire routing, but:
+- Dots persist even after deleting the wire they belong to — they become orphan clutter
+- Don't create dots programmatically unless the user specifically asks for wire routing cleanup
+- If you must, keep the count minimal (1–2 per long-distance connection, not per segment)
+
 ## Layout Principles
 
 - **Don't touch nodes you didn't analyze** — if a node isn't in your position map, leave it where it is
 - **Parallel chains in columns** — same vertical structure, horizontal offset
+- **Stagger branches to avoid wire overlap** — the #1 readability issue in complex networks
 - **Orphans far to the side** — visually separated, in their own network box labeled "Unused"
 - **Never call `layoutChildren()` on the whole network** — it destroys the user's intentional layout. Only use it on specific node subsets, or compute positions yourself
