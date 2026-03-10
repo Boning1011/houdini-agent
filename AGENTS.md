@@ -74,7 +74,9 @@ Scene data has three levels of detail. Use the minimum level needed — don't ju
 h.ui_state()                                    # where is the user?
 h.scene_snapshot("/obj/geo1", depth=1)           # all nodes: types, connections, non-default parms, flags
 ```
-This is like looking at the node network. `scene_snapshot` returns ~400 bytes/node. Don't call it repeatedly after every edit — use `exec(..., verify=[paths])` for post-edit checks on specific nodes.
+This is like looking at the node network. `scene_snapshot` returns ~400 bytes/node and **includes the full connection graph** (`inputs`/`outputs` per node). Don't call it repeatedly after every edit — use `exec(..., verify=[paths])` for post-edit checks on specific nodes.
+
+**Connection tracing:** After a `scene_snapshot`, trace connections **client-side** by walking the dict. Never call `query("node.input(0).path()")` in a loop — `scene_snapshot` already has this data.
 
 **Level 2 — Single node detail** (when debugging a specific node):
 ```python
@@ -191,3 +193,9 @@ After completing significant work (multi-step Houdini tasks, debugging sessions,
 - The server returns structured JSON with `{"status": "ok", "result": ...}` or `{"status": "error", "error": ...}`
 - All mutating operations are wrapped in `hou.undos` blocks — the user can **Ctrl+Z** to undo agent actions
 - Before multi-step operations, use `h.backup()` as a safety net
+
+## Architecture — Thin Server, Rich Client
+
+**The server (`bridge/server.py`) must stay minimal.** It provides a small set of primitive endpoints (`exec`, `batch`, `query`, `scene_snapshot`, etc.) that run on Houdini's main thread. Do NOT add new server routes for convenience methods.
+
+**All higher-level helpers belong in the client (`bridge/client.py`).** They compose existing primitives — just like `backup()`, `node_exists()`, and `list_backups()` already do. This keeps the server stable (no restart needed for new features) and the client easy to extend.

@@ -14,15 +14,19 @@ Professional approach to understanding unfamiliar/complex .hip files:
 
 This is the Houdini equivalent of "follow the money" — follow the render.
 
-### How to trace with existing API
+### Connection Tracing — MANDATORY Rule
 
-**Use `scene_snapshot`, not one-by-one queries.** The snapshot returns `inputs` and `outputs` for every node — you already have the full connection graph in one call. Trace client-side:
+> **NEVER trace connections one node at a time with repeated `query()` calls.**
+> `scene_snapshot` already returns the full connection graph (`inputs`/`outputs` per node) in a single call. Trace client-side — zero extra round-trips.
+
+This was the #1 waste pattern across multiple sessions (8+ unnecessary round-trips each time). If you find yourself calling `node.input(0).path()` or `node.outputs()` in a loop, you are doing it wrong.
 
 ```python
+# ONE call — gets the entire connection graph
 snap = h.scene_snapshot("/obj/EXAMPLES/risograph", depth=1)
 # snap is {node_path: {type, inputs, outputs, parms, ...}}
 
-# To trace upstream from a specific node, just walk the dict:
+# Trace upstream client-side — no additional Houdini calls
 def trace_upstream(snap, node_path, visited=None):
     if visited is None: visited = set()
     if node_path in visited: return []
@@ -34,12 +38,10 @@ def trace_upstream(snap, node_path, visited=None):
     return chain
 ```
 
-**Do NOT trace connections with repeated `query()` calls** (e.g., querying `node.input(0).path()` one node at a time). This was the #1 waste pattern in HDA analysis sessions — it took ~8 round-trips for something `scene_snapshot` returns in 1.
-
-For networks with 100+ nodes where you only care about one chain, an `exec_code` trace is more efficient than snapshotting the whole network:
+**Exception — very large networks (100+ nodes):** If you only need one chain and the network is huge, an `exec` trace on the server side is more efficient than snapshotting the whole network:
 
 ```python
-h.exec_code('''
+h.exec('''
 visited = {}
 def trace(node, depth=0):
     if depth > 20 or node.path() in visited: return
