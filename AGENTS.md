@@ -156,6 +156,7 @@ Reference material for Houdini-specific knowledge:
 - `context/kinefx-patterns.md` — KineFX reference
 - `context/hda-development.md` — HDA parm templates, PythonModule callbacks, rig pose mapping
 - `context/operation-patterns.md` — scene reading strategy, VEX gotchas, undo API, context retrieval
+- `context/network-layout.md` — node positioning, network boxes, layout workflow
 
 Consult these before writing Houdini Python code.
 
