@@ -67,6 +67,25 @@ trace(hou.node("/obj/EXAMPLES/risograph/outputs"))
 - `vector(x, y, z)` does NOT work in VEX — use `set(x, y, z)` instead
 - Always use raw strings (`r"""..."""`) for VEX code in Python to avoid escape issues
 
+## SOP Solver / DOPnet Cooking — Critical Gotcha
+
+**`hou.setFrame(N)` alone does NOT make a SOP Solver advance the simulation when you read it programmatically.** The DOPnet caches its last-cooked state and `cook(force=True)` on a downstream SOP only re-runs *that SOP*, not the upstream DOPnet. Reading `attrib_stats` / `attrib_values` after `setFrame` will silently return the same data for every frame, making it look like your VEX update is broken when it isn't.
+
+**The fix:** explicitly cook the dopnet at the new frame before reading any downstream node:
+
+```python
+h.exec(f'hou.setFrame({f})')
+h.exec('hou.node("/obj/geo1/my_solver/d").cook(force=True)')   # ← required
+h.exec('hou.node("/obj/geo1/OUT").cook(force=True)')
+stats = h.attrib_stats('/obj/geo1/OUT', ['my_attr'])
+```
+
+The DOPnet sits at `<solver_sop>/d` (a `dopnet` child of the Solver SOP wrapper). Inside it the actual SOP Solver DOP is `<solver_sop>/d/s`, and the user-edited SOP context (with your wrangle) is the children of `s`.
+
+A second symptom: if you call `resimulate.pressButton()` to reset, you must *also* `cook(force=True)` the dopnet — pressing the button alone just marks it dirty.
+
+When the user plays the timeline interactively (playbar ▶), this isn't a problem — playbar drives the dopnet's cook signal. The gotcha only bites when an agent is scrubbing programmatically.
+
 ## Undo API (Houdini 21.0)
 
 - Use `hou.undos.group(label)` as a **context manager**, NOT `beginBlock/endBlock` (that's an older API)
