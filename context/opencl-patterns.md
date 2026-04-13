@@ -1,58 +1,118 @@
 <!-- houdini_version: 21.0 -->
-# OpenCL SOP Patterns
+# OpenCL Patterns (SOP & COP)
 
 This document is a **harness, not a tutorial**. It records only things that are
 inherent to Houdini's OpenCL implementation — hidden behaviors where the error
 message is misleading or entirely absent. These traps are **independent of model
-capability**: even a much smarter model hitting SOP OpenCL for the first time
-will waste cycles on them, because the cause is Houdini-side state that cannot
-be inferred from the error alone.
+capability**: even a much smarter model hitting Houdini OpenCL for the first
+time will waste cycles on them, because the cause is Houdini-side state that
+cannot be inferred from the error alone.
 
 Everything else (kernel logic, algorithm design, optimization) the model should
 discover by writing code, reading errors, and iterating through the bridge.
 
-## Ground Truth: the SideFX Example HDA
 
-The single most useful reference for SOP OpenCL is an HDA shipped with Houdini
-that contains ~20 working snippets (topology arrays, prim/vertex loops, VDB
-sampling, matrix ops, writeback patterns, etc.). It is **far more complete than
-the online docs** and every `#bind` / `@KERNEL` pattern in it is guaranteed to
-compile.
+## SOP vs COP — Know Which Context You're In
+
+Houdini has OpenCL nodes in two contexts: **Sop/opencl** and **Cop/opencl**.
+They share the `@KERNEL {}` + `#bind` + `@WRITEBACK {}` framework but bind
+**fundamentally different data**. Applying SOP patterns in a COP kernel (or
+vice versa) will produce confusing errors. Check which context you're in first.
+
+**What they share:**
+- `@KERNEL {}`, `@WRITEBACK {}` blocks
+- `#bind parm` for scalar parameters
+- `getAt(j)` / `.len` for random access
+- `static` helper functions (but see trap #5 re: `getAt()` scope)
+
+**SOP-only** — operates on geometry elements (points, prims, vertices):
+
+| Feature | Syntax |
+|---|---|
+| Bind point attribute | `#bind point P float3` |
+| Bind detail attribute | `#bind detail myattr float` |
+| Current element index | `@elemnum` |
+| Element count | `@P.len` |
+
+**COP-only** — operates on image pixels, binds **layers** not attributes:
+
+| Feature | Syntax |
+|---|---|
+| Bind input layer (read) | `#bind layer src? val=0` |
+| Bind output layer (write) | `#bind layer !&dst` |
+| Bind layer with type | `#bind layer &src float2` |
+| Pixel coordinates | `@ix`, `@iy` |
+| Resolution | `@xres`, `@yres` |
+| Read pixel at position | `@src.bufferIndex((int2)(x,y))` |
+| Interpolated pixel read | `@src.bufferSample((float2)(x,y))` |
+| Texture-space coords | `@P.texture`, `@P.image` |
+| UV-space sample | `@src.textureSample(uv)` |
+| Bind ramp parameter | `#bind ramp my_ramp float3` |
+| Bind geometry from input | `#bind point Cd name=Cd port=geo float3` |
+
+Note: COP `!&dst` (write-only layer) **does** work without pre-creation —
+unlike SOP `!&` which requires an upstream `attribcreate` (see trap #4).
+
+
+## Official Documentation
+
+The SideFX online docs cover the OpenCL node's `#bind` directives, built-in
+variables, and available functions for each context:
+
+- **SOP OpenCL**: `$HFS/houdini/help/nodes/sop/opencl.txt` or press F1 on the
+  node. Documents `@elemnum`, `getAt()`, `#bind point/prim/vertex/detail`,
+  volume/VDB bindings, and the `@WRITEBACK` mechanism.
+- **COP OpenCL**: `$HFS/houdini/help/nodes/cop/opencl.txt` or press F1.
+  Documents `@ix/@iy`, `@xres/@yres`, layer bindings, `bufferIndex()`,
+  `bufferSample()`, `textureSample()`, and ramp bindings.
+
+These docs list every available function and built-in variable. **Read the
+relevant one before writing a kernel** — it prevents guessing at function names.
+
+
+## Ground Truth: the SideFX Example HDAs
+
+Both SOP and COP ship with example HDAs containing working snippets. These are
+**far more complete than the online docs** for real patterns. Every `#bind` /
+`@KERNEL` combination in them is guaranteed to compile.
 
 ```python
-# Install once per session — creates a new node type you can instantiate
-hou.hda.installFile(
-    hou.getenv("HFS")
-    + "/houdini/help/examples/nodes/sop/opencl/SimpleOpenCLSOPSnippets.hda"
-)
+hfs = hou.getenv("HFS")
+
+# SOP examples (~20 snippets: topology, prim/vertex, VDB, matrix, writeback)
+hou.hda.installFile(hfs + "/houdini/help/examples/nodes/sop/opencl/SimpleOpenCLSOPSnippets.hda")
+
+# COP examples (~30 snippets: pixel ops, convolution, sampling, ramps, geo binding)
+hou.hda.installFile(hfs + "/houdini/help/examples/nodes/cop/opencl/SimpleOpenCLCOPSnippets.hda")
 ```
 
-After installing, instantiate it under `/obj` and walk its children.
-Each child `opencl` node's `kernelcode` parm is a self-contained, working
-example. **When unsure about any binding syntax, dump and read the relevant
-snippet before guessing.**
+After installing, instantiate under `/obj` and walk children. Each child
+`opencl` node's `kernelcode` parm is a self-contained example. **When unsure
+about any binding syntax, dump and read the relevant snippet before guessing.**
 
 ```python
-# Dump every example kernel to stdout
-hda_node = hou.node("/obj").createNode("SimpleOpenCLSOPSnippets")
+# Dump every example kernel
+hda_node = hou.node("/obj").createNode("SimpleOpenCLSOPSnippets")  # or COP variant
 for child in hda_node.allSubChildren():
     if child.type().name() == "opencl":
         print(f"--- {child.path()} ---")
         print(child.parm("kernelcode").eval())
 ```
 
-Key examples to look at first:
+**SOP** — key examples to look at first:
 - `topo_neighbours` — writeback swap pattern, `getAt()` random access
 - `simple_point` — minimal point attribute read/write
 - `detail_attrib` — reading detail attributes in a kernel
 
+**COP** — key examples:
+- `greyscale` / `invert_color` — minimal layer read/write
+- `flip_image` / `Sobel_Filter` — `bufferIndex()` neighbor access
+- `opencl19` — `textureSample()` with writeback
+- `opencl24` / `opencl33` — binding geometry attributes (`#bind point ... port=geo`)
+- `opencl29` — ramp binding (`#bind ramp`)
 
-## @-binding Quick Reference
 
-The SOP `opencl` node and its COP cousin share the `atbinding=1` + `#bind` +
-`@KERNEL {}` framework, but each has functions the other doesn't. SOP-specific:
-`@elemnum`, `.getAt(j)`, `.len`. COP-specific: `.bufferIndex()`,
-`.worldSample()`, `@ix/@iy`.
+## SOP @-binding Quick Reference
 
 | Need | Syntax |
 |---|---|

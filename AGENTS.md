@@ -128,7 +128,7 @@ This is the Geometry Spreadsheet equivalent — use it when you need to know exa
 Before answering any Houdini-related question or writing Houdini Python code, **read the relevant `context/` docs first**. Do not answer from memory alone.
 
 - HDA questions → read `context/hda-development.md`
-- OpenCL SOP kernels → read `context/opencl-patterns.md`
+- OpenCL (SOP or COP) → read `context/opencl-patterns.md`
 - Scene operations, VEX, undo → read `context/operation-patterns.md`
 - USD/LOPs → read `context/usd-patterns.md`
 - KineFX → read `context/kinefx-patterns.md`
@@ -156,7 +156,7 @@ Reference material for Houdini-specific knowledge:
 - `context/usd-patterns.md` — USD/LOPs workflows
 - `context/kinefx-patterns.md` — KineFX reference
 - `context/hda-development.md` — HDA parm templates, PythonModule callbacks, rig pose mapping
-- `context/opencl-patterns.md` — OpenCL SOP @-binding, silent-failure traps, writeback pattern, SideFX example HDA
+- `context/opencl-patterns.md` — OpenCL (SOP & COP), binding differences, silent-failure traps, SideFX example HDAs
 - `context/operation-patterns.md` — scene reading strategy, VEX gotchas, undo API, context retrieval
 - `context/network-layout.md` — node positioning, network boxes, layout workflow
 
