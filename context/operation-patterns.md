@@ -102,59 +102,9 @@ When the user plays the timeline interactively (playbar ▶), this isn't a probl
 - **COP `inputConnectors()`**: Returns raw tuples in H21, not named objects. `.label()` does not exist. There's no reliable programmatic way to determine if a COP HDA expects mono vs RGB input — check the HDA's documentation or parameter interface instead
 - **`cook(force=True)` on untested HDAs**: Some HDAs fail on first programmatic cook but work fine interactively. Safer to skip force_cook or wrap in `try/except` when building example scenes
 
-## OpenCL SOP @-binding — Critical Gotchas
+## OpenCL SOP
 
-The SOP `opencl` node and its COP cousin share the modern `atbinding=1` + `#bind` directive + `@KERNEL { }` framework, but each has functions the other doesn't (COPs: `.bufferIndex()`, `.worldSample()`, `@ix/@iy`; SOPs: `@elemnum`, `.getAt(j)`, `.len`). The `kernelcode` parm convention noted under "COP-Specific Patterns" applies to SOP OpenCL nodes too.
-
-**The four silent-failure traps to check first when an OpenCL SOP misbehaves:**
-
-1. **`bindings = 1` legacy default poisons parsing.** A fresh `opencl` SOP starts with one empty entry in the legacy `bindings` multiparm (the manual binding UI). Under `atbinding=1` that empty entry errors at cook time with `Binding named '' has invalid name` even though your `#bind` directives in the kernel are perfectly fine. **Always `node.parm("bindings").set(0)` after creating the node.** Working SideFX example nodes confirm `bindings=0`.
-
-2. **`@WRITEBACK { }` requires `usewritebackkernel = 1`.** The block is silently ignored without the checkbox — no error, the simulation just looks frozen because the writeback never runs and the real attribute never gets updated from the temp. Always set the parm explicitly when using a writeback block:
-   ```python
-   node.parm("usewritebackkernel").set(1)
-   ```
-
-3. **`!&` write-only attributes do NOT auto-create**, despite what the official examples imply. The kernel will error with `Invalid attribute 'X'`. Pre-create the attribute with an upstream `attribcreate::2.0` (set `numattr`, then `name1`, `class1=2` for point, `type1=0` for float, `size1` 1 for scalar / 3 for vector). Even Houdini's own `opencl1` example (`#bind point !&foo float`) errors when run standalone — it relies on an unseen upstream node creating `foo`.
-
-4. **`#bind parm name float val=4.0` does NOT reliably link to a spare parm.** Adding a spare parm with the same name and a `ch("…")` expression looks like it should work, but the kernel may use the baked-in `val=` default depending on compile cache state. The failure mode is silent: parm changes have no effect on the simulation. **For any parameter that needs to come from outside the OpenCL node, use the detail-attribute pattern instead:**
-   ```c
-   // in kernel
-   #bind detail _muK float
-   @KERNEL { float muK = @_muK; ... }
-   ```
-   ```vex
-   // upstream attribwrangle, "Run Over: Detail"
-   f@_muK = ch("../../../muK");
-   ```
-   Detail attribs are read fresh every cook with no caching surprises. This is the only pattern verified to work for live parameter linking.
-
-**Two more traps for the writeback swap pattern (read-neighbors-write-self):**
-- The temp attribute used in writeback must be `&` (read+write), not `!&`. `@WRITEBACK` reads the temp to copy it back to the real attribute, so write-only fails with `Attribute 'X' must be readable.`
-- The two-pass swap (`@KERNEL` writes `@P_new`, `@WRITEBACK { @P.set(@P_new); }`) is the canonical race-free way to update an attribute that other threads are reading via `getAt(j)`. See `topo_neighbours` example.
-
-**SOP @-binding quick reference** (verified against `houdini/help/examples/nodes/sop/opencl/SimpleOpenCLSOPSnippets.hda`):
-
-| Need | Syntax |
-|---|---|
-| Current element index | `@elemnum` |
-| Total element count | `@P.len` |
-| Read another element's value | `@P.getAt(j)` (returns the bound type) |
-| Read-only point attrib | `#bind point P float3` |
-| Read+write point attrib | `#bind point &P float3` |
-| Write-only (must pre-create!) | `#bind point !&U float` |
-| Detail attribute | `#bind detail _muK float` |
-| Run-once detail attribwrangle | `attribwrangle.parm("class").set(0)` (0=detail, 2=points) |
-| Writeback swap | `@KERNEL { @temp.set(...) }` + `@WRITEBACK { @real.set(@temp); }` |
-
-To explore more patterns (topology arrays, prim/vertex loops, vdb sampling, matrix ops), install the example HDA and dump `kernelcode` from each `opencl` child:
-
-```python
-hou.hda.installFile(r"C:/Program Files/Side Effects Software/Houdini 21.0.631/houdini/help/examples/nodes/sop/opencl/SimpleOpenCLSOPSnippets.hda")
-# then instantiate the resulting nodetype under /obj and walk allSubChildren()
-```
-
-This is the canonical SideFX reference for SOP OpenCL — far more complete than the online docs.
+Moved to dedicated doc: `context/opencl-patterns.md` — binding reference, silent-failure traps, writeback pattern, SideFX example HDA method.
 
 ## HDA Batch Creation
 
