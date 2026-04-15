@@ -24,6 +24,10 @@ vice versa) will produce confusing errors. Check which context you're in first.
 - `#bind parm` for scalar parameters
 - `getAt(j)` / `.len` for random access
 - `static` helper functions (but see trap #5 re: `getAt()` scope)
+- **Iteration / Time built-ins** when the corresponding options are enabled
+  (see "Standard built-ins" below) — `@Iteration`, `@Time`, `@TimeInc`, etc.
+  These are capital-I / capital-T; lowercase `@iteration` / `@time` are
+  undefined and will error with "X is undefined".
 
 **SOP-only** — operates on geometry elements (points, prims, vertices):
 
@@ -52,6 +56,92 @@ vice versa) will produce confusing errors. Check which context you're in first.
 
 Note: COP `!&dst` (write-only layer) **does** work without pre-creation —
 unlike SOP `!&` which requires an upstream `attribcreate` (see trap #4).
+
+
+## Standard Built-ins — ALWAYS Know These
+
+These come from the OpenCL node's Options tab toggles. They appear in **every
+non-trivial kernel** (solvers, iteration, time-based effects). Do not reinvent
+or work around them with sentinel values / dynamic kernel rewrites.
+
+| Built-in       | Requires toggle         | Type  | Meaning |
+|----------------|-------------------------|-------|---------|
+| `@Iteration`   | `options_iteration` ON  | int   | 0-indexed iteration counter. `== 0` on the first pass. |
+| `@Time`        | `options_time` ON       | float | Current simulation time (accumulates `@TimeInc` per iter). |
+| `@TimeInc`     | `options_timeinc` ON    | float | Per-iteration time step. |
+| `@Frame`       | _(present with Time)_   | float | Current frame number. |
+
+**Capitalization matters.** `@iteration`, `@time`, `@iter` are all **undefined
+identifiers** — the error is "@iteration is undefined". Always capital letter:
+`@Iteration`, `@Time`, `@TimeInc`.
+
+**Other required toggles for iteration-based CA / solver work:**
+- `options_iteration = 1` — enable iteration mode
+- `options_iterations = N` — number of iterations (can be an expression like
+  `ch("../../res2")` to track canvas height)
+- `usewritebackkernel = 1` — enable `@WRITEBACK {}` block (silently ignored
+  without this — see trap #2)
+- `options_time = 1` — expose `@Time`
+- `options_timeinc = 1` — expose `@TimeInc` (auto-advance per iter)
+- `options_importprequel = 1` — on iteration 0, initialize output layers from
+  matching input layers (the ping-pong pattern depends on this when input and
+  output share a name like `state`)
+
+**Use `@Iteration == 0` to initialize** state on the first pass — far cleaner
+than a sentinel value in an upstream constant.
+
+
+## Rebuild Bindings — Every #bind parm Needs This
+
+**CRITICAL**: manually setting `#bind parm X int val=30` in the kernel text is
+**not enough** to make `X` a live, user-controllable parameter. The kernel
+reads `X` as a runtime kernel argument (`_bound_X` in generated code), but that
+argument is supplied by an entry in the `bindings` multiparm on the node.
+Without that entry, the kernel uses the `val=` default and any user-created
+spare parm named `X` / `X_val` is ignored.
+
+The UI has a small **"Rebuild Bindings"** button at the top of the kernel code
+editor. Programmatically, that button calls:
+
+```python
+import vexpressionmenu
+vexpressionmenu.createSpareParmsFromOCLBindings(opencl_node, 'kernelcode')
+```
+
+What it does:
+1. Parses the kernel via `hou.text.oclExtractBindings(code)`.
+2. For each `#bind parm NAME TYPE val=V`, creates a spare parm in the folder
+   `folder_generatedparms_kernelcode` (label "Generated Channel Parameters").
+   In **COPs** the spare parm is just `NAME`; in **SOPs / Python snippets**
+   it's `NAME_val`.
+3. Adds an entry to the `bindings` multiparm pointing at the spare parm via
+   expression (`ch("./NAME")` on `bindings{i}_intval` or `_fval`).
+4. Also creates input/output entries for `#bind layer` directives.
+
+**Call this after every kernel text change that adds/removes `#bind parm` or
+`#bind layer` lines.** Without it, new bindings are dead.
+
+**HDA pattern — top-level control via `ch()` chain:**
+
+For an HDA wrapping an OpenCL node, expose user parms at the HDA level and
+link the opencl's spare parms to them with a relative `ch()` expression. The
+chain is: HDA parm → (ch expression) → opencl spare parm → (ch expression in
+`bindings` multiparm) → kernel `_bound_X`.
+
+```python
+# After Rebuild Bindings generates opencl's spare parms:
+for pname in ['mode', 'rule', 'seed', 'density']:
+    opencl_node.parm(pname).setExpression(f'ch("../{pname}")')
+# HDA parm of the same name then drives the kernel live — no kernel rewrite needed.
+```
+
+The randomize buttons on the HDA just `.set()` the top-level parms; the
+expression cascade takes care of the rest.
+
+**Anti-pattern** (what to NOT do): dynamically rewriting the kernel text to
+inject values via `#define` or by mutating `val=`. It works but is fragile,
+recompiles the kernel on every parm change, and bypasses Houdini's native
+binding infrastructure. Use `#bind parm` + Rebuild Bindings instead.
 
 
 ## Official Documentation
@@ -148,23 +238,21 @@ The checkbox defaults to off.
 
 ### 3. Parm slider changes have no effect on the simulation — no error
 
-**Cause:** `#bind parm name float val=X` sometimes reads the baked-in default
-instead of the linked spare parm, depending on compile cache state. This is
-intermittent and version-dependent.
+**Cause:** After adding `#bind parm NAME TYPE val=X` to the kernel, the kernel
+compiles and runs using `val=X` as a hard-coded default. Without an entry in
+the `bindings` multiparm pointing at a spare parm, there is nothing to
+override that default — any spare parm you create manually with the right
+name is orphaned.
 
-**Proven alternative:** Use detail attributes instead of parm bindings for any
-value that needs to come from outside the kernel. An upstream detail wrangle
-writes the values; the kernel reads them via `#bind detail`. Detail attribs are
-read fresh every cook with no caching surprises.
+**Fix:** Call Rebuild Bindings — see the **Rebuild Bindings** section above.
+Programmatically: `vexpressionmenu.createSpareParmsFromOCLBindings(node, 'kernelcode')`.
+Run this after every kernel text change that touches `#bind parm` / `#bind layer`.
 
-```c
-#bind detail _muK float
-@KERNEL { float muK = @_muK; ... }
-```
-```vex
-// upstream attribwrangle, Run Over: Detail (class=0)
-f@_muK = ch("../../../muK");
-```
+**SOP fallback (detail attributes):** If for some reason the Rebuild path is
+unavailable, upstream detail attribs also work — an attribwrangle writes
+`f@_muK = ch(...)` and the kernel reads `#bind detail _muK float`. Detail
+attribs are read fresh every cook with no cache surprises. But prefer the
+Rebuild Bindings path for normal cases.
 
 ### 4. `Invalid attribute 'X'` on a `!&` (write-only) binding
 
