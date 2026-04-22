@@ -129,6 +129,9 @@ Before answering any Houdini-related question or writing Houdini Python code, **
 
 - HDA questions → read `context/hda-development.md`
 - OpenCL (SOP or COP) → read `context/opencl-patterns.md`
+- COPs Python Snippet (`cop/pythonsnippet`) → read `context/cops-python-snippet.md`
+  (this is **not** the same as OpenCL COPs and **not** the same as general `hou`
+  Python — it has its own `kwargs`/`return-dict`/`ImageLayer` API)
 - Scene operations, VEX, undo → read `context/operation-patterns.md`
 - USD/LOPs → read `context/usd-patterns.md`
 - KineFX → read `context/kinefx-patterns.md`
@@ -157,6 +160,7 @@ Reference material for Houdini-specific knowledge:
 - `context/kinefx-patterns.md` — KineFX reference
 - `context/hda-development.md` — HDA parm templates, PythonModule callbacks, rig pose mapping
 - `context/opencl-patterns.md` — OpenCL (SOP & COP), binding differences, silent-failure traps, SideFX example HDAs
+- `context/cops-python-snippet.md` — `cop/pythonsnippet` API (kwargs / return-dict / ImageLayer), HDA-wrapping pitfalls
 - `context/operation-patterns.md` — scene reading strategy, VEX gotchas, undo API, context retrieval
 - `context/network-layout.md` — node positioning, network boxes, layout workflow
 
