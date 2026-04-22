@@ -125,6 +125,43 @@ buffer a numpy-vectorised LUT lookup runs in tens of ms; a Python `for`-loop
 will be many seconds. If numpy can't express it, drop down to OpenCL COP — see
 [opencl-patterns.md](opencl-patterns.md).
 
+## Foolproof I/O — accept anything, emit something useful
+
+The Signature tab couples I/O strictly by default (`float4` in → `float4` out
+means a Mono layer wired into the input throws a type mismatch). For nodes
+intended as drop-in user-facing filters, prefer:
+
+- **Input:** `floatn` (Varying) — accepts Mono / UV / RGB / RGBA without complaint.
+- **Output:** the widest type the node can emit (often `float4` RGBA), so
+  downstream always sees a known-shaped layer.
+
+Inside the snippet, branch on `src.channelCount()` and **promote** the buffer
+to whatever your maths assumes (usually 3-channel RGB):
+
+```python
+in_ch = src.channelCount()
+img = np.frombuffer(src.allBufferElements(), dtype=np.float32).reshape(h, w, in_ch)
+
+if in_ch == 1:
+    rgb = np.repeat(img, 3, axis=2)        # mono: replicate
+elif in_ch == 2:
+    rgb = np.zeros((h, w, 3), dtype=np.float32)
+    rgb[..., 0:2] = img                    # UV-ish: pad blue with zero
+else:
+    rgb = img[..., :3].copy()              # 3 / 4 / more: take first three
+```
+
+Always honour `storageType()` when decoding and re-encoding so you don't
+silently change precision (`UNorm8` ↔ `np.uint8` × `1/255`, `Float16` ↔
+`np.float16`, etc.). The "obvious" `np.frombuffer(buf, dtype=np.float32)`
+crashes loudly on any non-`Float32` layer — always read the storage enum first.
+
+For filters where the *visual effect* matters more than format-fidelity (a
+LUT, a colour grade, a film-look), output 4-channel RGBA even when input is
+mono — that lets a B&W layer pick up the LUT's colour tint instead of being
+collapsed back to luminance. If you want it to stay mono, collapse with
+Rec.709 weights `0.2126 R + 0.7152 G + 0.0722 B`.
+
 ## Live example in the wild
 
 `motion-cops` repo → `boning::mc_lut_apply::1.0`
