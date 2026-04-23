@@ -46,6 +46,142 @@ Note: COP `!&dst` (write-only layer) **does** work without pre-creation —
 unlike SOP `!&` which requires an upstream `attribcreate` (see trap #4).
 
 
+## COP OpenCL on VDBs (NanoVDB, H21)
+
+H21 introduced NanoVDB-native 3D volumes in COPs. The `opencl` COP runs
+kernels per voxel on active leaves of a VDB. This is a *completely different*
+data model from 2D layer kernels — almost every pattern differs.
+
+**Running over a VDB:**
+
+- Set `options_runover = 'vdb'` (First Writeable VDB).
+- Input ports must be typed as VDBs — `fvdb` (Float VDB), `vvdb` (Vector
+  VDB), or `fnvdb` (Varying VDB). A port typed `geo` (Geometry) **cannot**
+  supply a VDB input — you must split with a `geotolayer::2.0` upstream
+  (set its `outtype#` to `floatvdb` / `vectorvdb` to keep the VDB 3D, not
+  slice into a layer). Enable its **Densify VDBs** toggle — the GPU can't
+  just-in-time unpack constant tiles, so random writes require dense leaves.
+
+**Per-voxel built-ins** (replace layer `@P` / `@ix @iy`):
+
+| Built-in | Type | Meaning |
+|---|---|---|
+| `@ix`, `@iy`, `@iz`, `@ixyz` | `int`, `int3` | Current voxel index |
+| `@elemnum` | `int` | Flat voxel counter (topology-dependent) |
+
+**`@P` is NOT defined when running over VDBs** — it exists only for
+layers/fields. To get the world-space position of the current voxel:
+
+```c
+float3 Pw = @mybind.indexToWorld((float3)((float)@ix, (float)@iy, (float)@iz));
+```
+
+Requires `xformtoworld` flag on the binding.
+
+### VDB `#bind` syntax
+
+```c
+#bind vdb mysrc float xformtoworld voxelsize        // read-only float VDB
+#bind vdb mysrc float3                              // read-only vector VDB
+#bind vdb &inout  float3                            // read+write (VDB must pre-exist in input)
+#bind vdb !&newout float3                           // write-only — creates new VDB, topology from first input
+```
+
+Type tokens are **OpenCL C types** (`float`, `float3`) — **not** `vector`.
+Writing `#bind vdb &grad vector` produces the misleading warning "Unknown
+token 'vector'" plus a cascade of "@grad.set: unknown method" errors.
+
+Common binding flags:
+
+| Flag | Enables |
+|---|---|
+| `xformtoworld` | `indexToWorld`, `indexToWorldDir`, and `worldGradient` in some cases |
+| `xformtovoxel` | `worldToIndex`, `worldToIndexDir` |
+| `voxelsize` | `@name.voxelsize_x/y/z`, `@name.voxelsize` |
+| `resolution` | `@name.res` / bounds checks |
+
+### Creating a new VDB from thin air — the `!&` + `metadata=first` pattern
+
+Key insight for HDAs that produce a *different-typed* VDB from the input
+(e.g. Gradient: Float → Vector): you do **not** need an upstream SOP to
+pre-allocate the output container. Instead:
+
+1. On the opencl COP: `output#_type = vvdb` (desired new type),
+   `output#_metadata = first` — topology is inherited from the first
+   typed input.
+2. In the kernel: `#bind vdb !&out float3` — the **`!&`** (not `&`) prefix
+   means "write-only, don't expect it to pre-exist." The runtime creates
+   a new VDB with the input's active topology and the bound type.
+
+Using `&out` instead of `!&out` produces "unknown method" errors on
+`@out.set(...)` because `&` assumes the target already exists in the input
+stream and couldn't be found.
+
+### VDB method reference (on a bound VDB `@name`)
+
+Read methods. The method name is **`getAt`**, not `valueAt` (`valueAt` is
+a volume-binding method — using it on a VDB gives "unknown method"):
+
+| Method | Returns | Notes |
+|---|---|---|
+| `@name` | current voxel value | Float VDB → float; Vector VDB → float3 |
+| `@name.getAt(x,y,z)` | value at integer index | Returns background for inactive; clamp-safe |
+| `@name.sample(ixyz)` | trilinear at `float3` index coords | |
+| `@name.worldSample(xyz)` | trilinear at world-space `float3` | Cheap for stencils |
+| `@name.worldGradient(xyz)` | **built-in central-difference gradient** | Float VDB only |
+| `@name.worldToIndex(xyz)` | world → index | Requires `xformtovoxel` |
+| `@name.indexToWorld(xyz)` | index → world | Requires `xformtoworld` |
+| `@name.active` / `@name.activeAt(x,y,z)` | topology test | |
+| `@name.voxelsize_x/y/z` | world-space voxel size per axis | Requires `voxelsize` |
+| `@name.leafCount`, `@name.leafAt(x,y,z)` | leaf-level access | |
+
+Write methods:
+
+| Method | Notes |
+|---|---|
+| `@name.set(val)` | Write current voxel (requires matching index) |
+| `@name.setAt(x,y,z,val)` | Write arbitrary — **only succeeds on already-active voxels**; writes to inactive voxels silently no-op |
+
+**Topology is immutable inside OpenCL.** To activate new voxels (e.g., wider
+stencil support for curvature at band edges), use `vdbactivatefrompoints`
+upstream, not the kernel.
+
+### No built-in curvature / Laplacian / divergence / curl
+
+Only `worldGradient` is built-in. Other vector-calc operators must be
+hand-rolled from stencils. Canonical SDF mean curvature via divergence of
+normalized gradient (7 `worldGradient` calls per voxel):
+
+```c
+#bind vdb surface    float xformtoworld voxelsize
+#bind vdb !&curvature float
+
+@KERNEL {
+    float3 Pw = @surface.indexToWorld((float3)((float)@ix,(float)@iy,(float)@iz));
+    float vx = @surface.voxelsize_x, vy = @surface.voxelsize_y, vz = @surface.voxelsize_z;
+
+    float3 gpx = @surface.worldGradient(Pw + (float3)( vx, 0, 0));
+    float3 gmx = @surface.worldGradient(Pw + (float3)(-vx, 0, 0));
+    // ... 4 more along y, z
+    // safe-normalize each (guard length < 1e-8)
+    float divN = (npx.x - nmx.x)/(2*vx) + (npy.y - nmy.y)/(2*vy) + (npz.z - nmz.z)/(2*vz);
+    @curvature.set(0.5f * divN);
+}
+```
+
+### Polymorphic-output HDAs: two switches, not one
+
+The `switch` COP's output type is the *highest* of its inputs, and all
+inputs must convert to it. Float VDB and Vector VDB are not convertible in
+either direction — wiring them into one switch errors. For an HDA with a
+mode selector where different modes produce different-typed outputs
+(e.g. VDB Analyze), use **two switches** — one for scalar-output modes,
+one for vector-output modes — and expose two typed outputs on the HDA.
+Setting all opencl outputs to `fnvdb` (Varying VDB) does **not** fix this:
+`!&` writes commit at one concrete type, and Varying VDB downstream inputs
+still enforce a specific type at cook time.
+
+
 ## Standard Built-ins — ALWAYS Know These
 
 Appear in every non-trivial iteration / solver / time-based kernel. Don't
