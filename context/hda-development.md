@@ -69,6 +69,22 @@ Steps after any HDA save (`updateFromNode`, `setParmTemplateGroup`, `setContents
 - If `git pull --rebase` has conflicts, stop and ask the user.
 - If the repo has unstaged changes unrelated to the HDA, stash them before rebase and pop after.
 
+## Do NOT uninstall + install + save in one exec batch (H21.0 crash)
+
+**Never** do `hou.hda.uninstallFile(lib)` → `hou.hda.installFile(lib)` → `defn.save(lib)` within the same `exec()` call, or back-to-back without a UI event tick between them. Houdini 21.0.631 segfaults in `UI_Object::isAncestor` when the OTL manager's dialog refresh runs against a freshly torn-down parm template tree. Stack top:
+
+```
+UI_Object::isAncestor → UI_Feel::replaceChild → OPUI_Dialog::reloadDialog
+  → OP_Operator::updateParmTemplates → OP_OTLManager::refreshLibrary
+  → HOMF_HDADefinition::save
+```
+
+What to do instead:
+- To update an already-loaded HDA, just `defn.save(defn.libraryFilePath())` — Houdini refreshes automatically. No uninstall needed.
+- If you truly need to reload from disk, use `hou.hda.reloadFile(lib)` (single call, no unpaired uninstall/install).
+- If you botched a createDigitalAsset and the type name is "stuck" in memory, don't fight it with uninstall — bump the version (e.g. `::1.0` → `::1.0.1`) and save to a new library path, or ask the user to restart Houdini.
+
+
 ## Bridge Execution Tips
 
 - **`query()` = single expression** (returns value), **`exec()` = multi-line code** (returns None on success).
