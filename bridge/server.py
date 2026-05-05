@@ -75,23 +75,52 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"success": False, "error": f"Unknown endpoint: {self.path}"}, 404)
 
 
-def start_server(port=DEFAULT_PORT):
-    """Start the Houdini Agent bridge server."""
+PORT_SEARCH_RANGE = 16
+
+
+def start_server(port=DEFAULT_PORT, port_search_range=PORT_SEARCH_RANGE):
+    """Start the Houdini Agent bridge server.
+
+    If `port` is already bound (e.g. another Houdini instance is running),
+    walks up to `port_search_range` consecutive ports before giving up. The
+    bound port is whatever start_server() actually grabbed — read it back via
+    _server_instance.server_address[1] (the panel does this).
+    """
     global _server_instance
 
     if _server_instance is not None:
         print("[houdini-agent] Server already running.")
         return
 
-    server = HTTPServer(("127.0.0.1", port), HoudiniRequestHandler)
-    _server_instance = server
+    server = None
+    bound_port = None
+    last_error = None
+    for offset in range(port_search_range):
+        try_port = port + offset
+        try:
+            server = HTTPServer(("127.0.0.1", try_port), HoudiniRequestHandler)
+            bound_port = try_port
+            break
+        except OSError as e:
+            last_error = e
+            continue
 
+    if server is None:
+        print(f"[houdini-agent] Could not bind any port in "
+              f"{port}-{port + port_search_range - 1}: {last_error}")
+        return
+
+    _server_instance = server
     hou.ui.addEventLoopCallback(_main_thread_processor)
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    print(f"[houdini-agent] Bridge server started on http://127.0.0.1:{port}")
+    if bound_port == port:
+        print(f"[houdini-agent] Bridge server started on http://127.0.0.1:{bound_port}")
+    else:
+        print(f"[houdini-agent] Bridge server started on http://127.0.0.1:{bound_port} "
+              f"(default {port} was busy)")
     endpoints = ["/status"] + list(POST_HANDLERS.keys())
     print(f"[houdini-agent] Endpoints: {', '.join(endpoints)}")
 

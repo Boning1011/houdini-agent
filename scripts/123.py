@@ -74,4 +74,9 @@ def _bootstrap():
         start_server()
 
 
-_bootstrap()
+try:
+    _bootstrap()
+except Exception as _e:
+    # Never let an autostart failure take Houdini down with us — Houdini
+    # treats unhandled exceptions in 123.py as fatal startup errors.
+    print(f"[houdini-agent] autostart failed: {_e}")
