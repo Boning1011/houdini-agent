@@ -66,7 +66,15 @@ Set `HOUDINI_AGENT_ROOT` in your OS environment (Windows: System Properties > En
 
 ## Quick Start
 
-### Option A: Python Panel (recommended)
+### Option A: Auto-start on launch (recommended)
+
+With the package installed, `scripts/123.py` fires on every Houdini launch and starts the bridge server automatically — no UI interaction required. Launching Houdini from the terminal is enough.
+
+- Disable autostart for one session: `HOUDINI_AGENT_AUTOSTART=0 houdini`
+- Use a non-default port: `HOUDINI_AGENT_PORT=8770 houdini`
+- Headless (`hython`) is detected and skipped — autostart is GUI-only
+
+### Option B: Python Panel
 
 1. In Houdini's Python Shell, run:
    ```python
@@ -77,7 +85,7 @@ Set `HOUDINI_AGENT_ROOT` in your OS environment (Windows: System Properties > En
 
 The panel provides Start/Stop controls, port config, status display, and a live log. It also hot-reloads bridge code on each start, so you don't need to restart Houdini after code changes.
 
-### Option B: Python Shell
+### Option C: Python Shell
 
 In Houdini's Python Shell:
 ```python
