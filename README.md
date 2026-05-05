@@ -93,6 +93,18 @@ from bridge.server import start_server
 start_server()
 ```
 
+### Option D: Headless (no GUI)
+
+Run the bridge in a `hython` process — no Houdini window, no viewport, no event loop. The agent drives a fully headless Houdini.
+
+```bash
+hython "$HOUDINI_AGENT_ROOT/scripts/serve_headless.py" --port 8765
+# Optional: load a .hip file before serving
+hython "$HOUDINI_AGENT_ROOT/scripts/serve_headless.py" --hip /path/to/scene.hip
+```
+
+Run multiple instances on different ports for parallel agents on one machine. SIGINT/SIGTERM exits cleanly; the server prints its PID on startup so external scripts can target it directly. GUI-only handlers (`/screenshot`, parts of `/ui_state`) return clear errors — everything else (exec, batch, scene_snapshot, parms, geometry, undo) works the same as in GUI mode.
+
 ### Connect from outside
 
 ```python

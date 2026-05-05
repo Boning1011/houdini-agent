@@ -2,12 +2,17 @@
 Houdini-side HTTP server for the Houdini Agent bridge.
 
 Thin routing skeleton — all endpoint logic lives in bridge.handlers.
-Runs inside Houdini as a background thread.
+GUI mode runs as a background thread driven by Houdini's UI event loop.
+Headless mode (hython) runs HTTP on a background thread and pumps the
+main-thread queue from the calling thread.
 """
 
 import hou
 import json
+import os
+import signal
 import threading
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from bridge.main_thread import _main_thread_processor
@@ -17,6 +22,7 @@ DEFAULT_PORT = 8765
 
 # Shared state
 _server_instance = None
+_headless_stop = None
 
 
 class HoudiniRequestHandler(BaseHTTPRequestHandler):
@@ -92,13 +98,64 @@ def start_server(port=DEFAULT_PORT):
 
 def stop_server():
     """Stop the Houdini Agent bridge server."""
-    global _server_instance
+    global _server_instance, _headless_stop
 
     if _server_instance is None:
         print("[houdini-agent] No server running.")
         return
 
-    hou.ui.removeEventLoopCallback(_main_thread_processor)
-    _server_instance.shutdown()
+    if _headless_stop is not None:
+        _headless_stop.set()
+        _headless_stop = None
+    else:
+        hou.ui.removeEventLoopCallback(_main_thread_processor)
+        _server_instance.shutdown()
+
     _server_instance = None
     print("[houdini-agent] Server stopped.")
+
+
+def serve_headless(port=DEFAULT_PORT, poll_interval=0.02):
+    """Run the bridge in a hython process. Blocks until SIGINT/SIGTERM.
+
+    Houdini's UI event loop is what marshals HTTP-thread tasks back to the
+    main thread in GUI mode. In hython there is no UI loop, so the calling
+    thread (the one that invoked this function — by definition the main
+    thread) drives the queue itself in a poll loop.
+    """
+    global _server_instance, _headless_stop
+
+    if _server_instance is not None:
+        print("[houdini-agent] Server already running.")
+        return
+
+    server = HTTPServer(("127.0.0.1", port), HoudiniRequestHandler)
+    _server_instance = server
+    _headless_stop = threading.Event()
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    print(f"[houdini-agent] Bridge server (headless) on http://127.0.0.1:{port}")
+    print(f"[houdini-agent] PID {os.getpid()} (SIGINT/SIGTERM to stop)")
+    endpoints = ["/status"] + list(POST_HANDLERS.keys())
+    print(f"[houdini-agent] Endpoints: {', '.join(endpoints)}")
+
+    def _shutdown(signum, frame):
+        if _headless_stop is not None:
+            _headless_stop.set()
+
+    prev_int = signal.signal(signal.SIGINT, _shutdown)
+    prev_term = signal.signal(signal.SIGTERM, _shutdown)
+
+    try:
+        while not _headless_stop.is_set():
+            _main_thread_processor()
+            time.sleep(poll_interval)
+    finally:
+        signal.signal(signal.SIGINT, prev_int)
+        signal.signal(signal.SIGTERM, prev_term)
+        server.shutdown()
+        _server_instance = None
+        _headless_stop = None
+        print("[houdini-agent] Server stopped.")
