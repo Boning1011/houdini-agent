@@ -30,6 +30,15 @@ os.makedirs(dst_dir, exist_ok=True)
 dst = os.path.join(dst_dir, "houdini_agent.pypanel")
 
 shutil.copy2(src, dst)
+hou.pypanel.installFile(dst)
+
+# pypanel registration and menu inclusion are separate concerns in Houdini.
+# installFile() registers the interface; setMenuInterfaces() controls what
+# shows up in the pane tab menu.
+menu = list(hou.pypanel.menuInterfaces())
+if "houdini_agent" not in menu:
+    menu.append("houdini_agent")
+    hou.pypanel.setMenuInterfaces(menu)
+
 print(f"[houdini-agent] Installed panel to: {dst}")
-print("[houdini-agent] Restart Houdini or refresh panels to see it.")
 print("[houdini-agent] Look for: New Pane Tab Type > Houdini Agent")
