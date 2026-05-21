@@ -143,6 +143,17 @@ If unsure which doc is relevant, scan all of them. The cost of reading a file is
 
 When the user asks you to "look at", "check", or "see" something, act immediately using the Bridge API above. Do not search the codebase for how to call these methods — just use them directly. You have vision: capture a screenshot, read the image, and respond.
 
+## Network Construction Style — Split for Humans, Not Just AI
+
+The network is read by humans weeks after you build it. **Looking at the network alone should tell a human what operations exist** — they should only need to open VEX to see *how* a specific operation works, never *what* operations live in the graph.
+
+- **One Wrangle = one coherent operation.** A long VEX block is fine if it's one focused job (e.g., computing an OBB axis permutation). Don't fragment that into tiny wrangles.
+- **Never mix unrelated logic** into a single Wrangle. Hiding a `setprimgroup`, an `attribdelete`, or an unrelated color computation inside a math wrangle makes the network un-readable later. The user will not remember it's in there.
+- **Use dedicated SOPs for simple operations** even if a wrangle could do it in one line: `Group Create` for groups, `Attribute Delete` for removing attribs, `Blast`/`Group Promote`/etc. for routing. The node's name is the documentation.
+- **Don't over-split either.** Three single-line wrangles back-to-back is worse than one well-named wrangle that does a coherent thing. Aim for clarity, not maximal fragmentation.
+
+Rule of thumb: if a future reader would need to open VEX to figure out *what operations exist in this branch*, you split it wrong. Pull the standalone operations out into their own named nodes.
+
 ## Skills
 
 Skills live in `skills/`. Each skill is a directory with:
