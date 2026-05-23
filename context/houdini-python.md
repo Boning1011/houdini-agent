@@ -1,6 +1,51 @@
 <!-- houdini_version: 21.0 -->
 # Houdini Python (hou module) — Reference
 
+## Python SOPs — Don't Materialize Full Element Lists
+
+When writing a Python SOP (or any code) that handles geometry whose
+size you don't control, avoid `.prims()` / `.points()` / `.vertices()`
+in patterns that materialize the full tuple just to count or peek:
+
+```python
+# BAD on large inputs — builds a Python tuple of every prim object
+geo.prims()[0]              # materializes all N prims to take [0]
+len(geo.prims())            # materializes all N prims to call len
+for p in geo.prims(): ...   # tuple-built first, then iterated
+```
+
+Use the lazy alternatives:
+
+```python
+# Count via cheap intrinsic
+n = geo.intrinsicValue("primitivecount")
+# (also: "pointcount", "vertexcount")
+
+# Fetch just the first element
+first = None
+for p in geo.iterPrims():
+    first = p
+    break
+
+# Iterate without front-loading the tuple
+for p in geo.iterPrims():
+    ...
+```
+
+Gotcha: `iterPrims()` returns an *iterable*, not an iterator —
+`next(geo.iterPrims())` raises `TypeError`. Wrap with `iter()` or
+use the for-loop pattern.
+
+Measured impact: in the `fab::set_cnc_stock` HDA, switching a single
+`src.prims()[0]` to the `iterPrims()` pattern dropped a Python SOP's
+cook time from ~4.2 s to under 50 ms on a 1.6M-prim input — 80×
+faster. The actual attribute-copy work was already microseconds; all
+the cost was the tuple build.
+
+Reserve `.prims()` / `.points()` for cases where you genuinely need
+the full tuple AND the input is small (e.g. iterating the prims of
+an OBB box, 6 elements).
+
 ## Thread Safety
 
 **The `hou` module is NOT thread-safe.** All hou calls must happen on Houdini's main thread.
