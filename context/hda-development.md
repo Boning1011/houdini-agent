@@ -119,6 +119,83 @@ What to do instead:
 - If you botched a createDigitalAsset and the type name is "stuck" in memory, don't fight it with uninstall — bump the version (e.g. `::1.0` → `::1.0.1`) and save to a new library path, or ask the user to restart Houdini.
 
 
+## More Gotchas From the Trenches
+
+### `updateFromNode` order matters when changing BOTH network and parms
+
+When an edit touches both the internal network AND the parm template:
+
+```python
+N.allowEditingOfContents()
+# 1. modify the instance's contained network (create/wire/destroy nodes)
+# 2. THEN sync the network into the type:
+defn.updateFromNode(N)
+# 3. THEN apply parm template changes:
+ptg = defn.parmTemplateGroup()      # ← read AFTER updateFromNode
+# ... modify ptg ...
+defn.setParmTemplateGroup(ptg)
+# 4. THEN save and refresh instances:
+defn.save(defn.libraryFilePath())
+for inst in op.instances():
+    inst.matchCurrentDefinition()
+```
+
+If you call `matchCurrentDefinition()` BEFORE `updateFromNode()`, the
+instance reverts to whatever the type currently looks like, throwing
+away your new internal nodes.
+
+If you build a fresh ParmTemplateGroup from scratch and call
+`defn.setParmTemplateGroup(ptg)` AFTER `updateFromNode` (which already
+pulled the current parm template into the definition), you can get
+`Parameter name 'X' is invalid or already exists` because the
+definition already has those parms. Read the ptg back from the
+definition AFTER updateFromNode and modify it in place instead.
+
+### `ptg.replace(name, new_template)` can't rename in one shot
+
+`replace(name, tpl)` uses the FIRST argument as the identifier to
+look up. If `tpl.name() != name` it tries to add `tpl` as a new entry
+and gets a "Parameter name 'X' already exists" conflict against the
+one you intended to replace. To rename a folder, either:
+
+- Keep the internal `name` identical and only change the label
+  (`hou.FolderParmTemplate(same_name, "New Label", ...)`), or
+- Remove the old by name first, then insert the new with a different
+  name at the same position (`ptg.remove("old"); ptg.insertBefore("anchor", new)`).
+
+### VEX `@attrib = ...` PRE-DECLARES the attribute even inside `if(){}`
+
+```vex
+// Looks like this only creates volume_in3 when cond is true.
+// In reality: volume_in3 gets pre-declared at COMPILE time and
+// exists in every cook with default value 0, even when cond=0.
+if (cond) {
+    f@volume_in3 = some_value;
+}
+```
+
+Use the function-call form to avoid the pre-declaration:
+
+```vex
+if (cond) {
+    setdetailattrib(0, "volume_in3", some_value, "set");
+    // setpointattrib / setprimattrib / setvertexattrib similarly
+}
+```
+
+Symptom in the wild: downstream node still sees `volume_in3=0` on every
+prim/point when the user expected the attribute to be absent entirely
+under the off path.
+
+### Measure SOP: `attribname` cannot be empty
+
+The per-prim output attribute name is required. Setting `attribname=""`
+to "disable" it errors with "Could not create primitive attribute ''".
+Set it to a junk name with an underscore prefix (e.g. `_per_prim_volume`)
+and rely on downstream cleanup if you don't want it in the final output.
+The `usetotalattrib` toggle controls the detail-attribute output
+independently; that one CAN be turned off.
+
 ## Bridge Execution Tips
 
 - **`query()` = single expression** (returns value), **`exec()` = multi-line code** (returns None on success).
