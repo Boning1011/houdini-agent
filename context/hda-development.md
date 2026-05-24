@@ -17,11 +17,45 @@ defn = node.type().definition()
 defn.updateFromNode(node)      # sync any live edits from the node
 ptg = defn.parmTemplateGroup()
 # ... modify ptg ...
-defn.setParmTemplateGroup(ptg)
+defn.setParmTemplateGroup(ptg)   # ← write back to the TYPE definition
 ```
 
 - **Always call `updateFromNode(node)` first** — otherwise you may overwrite changes the user made in the Type Properties dialog.
 - **User can clobber your changes**: If they have the Type Properties editor open and click Apply after your programmatic update, their cached version overwrites yours. Warn about this.
+
+### ⚠️ Parm-template traps — read this before "shortcuts"
+
+**`node.setParmTemplateGroup(ptg)` is NOT a shortcut for `defn.setParmTemplateGroup(ptg)`.** They do different things:
+
+| Call | Where the parms live | Effect |
+|---|---|---|
+| `node.setParmTemplateGroup(ptg)` | On the **instance** as spare parms. Persist with the .hip file. | HDA TYPE stays empty. New instances of the type get a blank panel. |
+| `defn.setParmTemplateGroup(ptg)` | On the **HDA type definition**, saved into the .hda/.hdalc file. | Every instance (existing + future) inherits these parms. |
+
+**`defn.updateFromNode(node)` does NOT promote node-level spare parms into the type's parm template.** It syncs the contained network and some metadata, but spare parms stay where they were — on the instance.
+
+Symptoms when you've used the wrong call:
+- The running instance has all the parms and behaves correctly. Looks like everything works.
+- But `defn.parmTemplateGroup().parmTemplates()` returns `[]`.
+- And `defn.sections()["DialogScript"].contents()` is ~310 bytes (just the skeleton — a real HDA with parms is several KB).
+- Then the user crashes or starts a fresh session and creates a new instance (with `_1` suffix), and that instance has an **empty parm panel**. Any wrangles whose expressions reference parent parms (e.g. `ch("../buffer_in")`) start erroring with "Unable to evaluate expression".
+
+How to verify after any HDA parm work:
+```python
+defn = node.type().definition()
+n_parms = len(defn.parmTemplateGroup().parmTemplates())
+ds_size = len(defn.sections()["DialogScript"].contents())
+assert n_parms > 0 and ds_size > 500, "parm template not promoted to HDA type"
+```
+
+If you DID use `node.setParmTemplateGroup()` and need to recover:
+```python
+ptg = node.parmTemplateGroup()       # capture from the instance
+defn.setParmTemplateGroup(ptg)       # write into the type
+defn.save(defn.libraryFilePath())
+for inst in node.type().instances():
+    inst.matchCurrentDefinition()    # refresh existing instances
+```
 
 ## PythonModule & Button Callbacks
 
