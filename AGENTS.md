@@ -19,7 +19,7 @@ Houdini Scene
 
 ```python
 from bridge.client import HoudiniClient
-h = HoudiniClient()            # connects to localhost:8765
+h = HoudiniClient()            # auto-discovers the running Houdini (see "Multiple Houdinis" below)
 h.status()                     # health check
 h.exec("hou.node('/obj').createNode('geo')")
 tree = h.get_node_tree("/obj")
@@ -207,7 +207,8 @@ After completing significant work (multi-step Houdini tasks, debugging sessions,
 
 - The `hou` module is **not thread-safe**. All hou calls must run on Houdini's main thread.
 - The server uses `hou.ui.addEventLoopCallback` to marshal calls from the HTTP thread to the main thread.
-- Default server port: **8765**
+- Default server port: **8765** — when busy (another Houdini instance), the server walks up to 8780.
+- Multiple Houdinis: each running bridge writes a JSON entry to `%TEMP%/houdini_agent/instances/<pid>.json`. `HoudiniClient()` with no `port=` argument auto-discovers via that registry, pings each `/status` to prune dead entries, and picks by `hip_file` ⊂ `cwd`. If still ambiguous it raises with the full list — pass `port=N` to choose. Use `HoudiniClient.list_instances()` to see them all.
 - The server returns structured JSON with `{"status": "ok", "result": ...}` or `{"status": "error", "error": ...}`
 - All mutating operations are wrapped in `hou.undos` blocks — the user can **Ctrl+Z** to undo agent actions
 - Before multi-step operations, use `h.backup()` as a safety net

@@ -12,20 +12,113 @@ Usage:
 """
 
 import json
+import os
+import time
 import urllib.request
 import urllib.error
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DEFAULT_TIMEOUT = 30
+DISCOVERY_PING_TIMEOUT = 1.0
+
+
+def _ping_status(host, port, timeout=DISCOVERY_PING_TIMEOUT):
+    """Hit /status on a candidate port. Returns the parsed dict or None if dead."""
+    try:
+        with urllib.request.urlopen(
+            f"http://{host}:{port}/status", timeout=timeout
+        ) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _discover_instances(host=DEFAULT_HOST, timeout=DISCOVERY_PING_TIMEOUT):
+    """Read the registry, ping each entry, prune dead ones, return live instances.
+
+    Each entry is merged with the fresh /status response so callers see the
+    current hip_file (the user may have opened a different .hip since start).
+    """
+    # Import lazily — the bridge package may not be importable from every
+    # client context, and we want a friendly ImportError if it isn't.
+    from bridge import discovery
+
+    live = []
+    for entry in discovery.list_entries():
+        info = _ping_status(host, entry["port"], timeout=timeout)
+        if info is None:
+            try:
+                os.remove(entry["_path"])
+            except OSError:
+                pass
+            continue
+        live.append({**entry, **info})
+    return live
 
 
 class HoudiniClient:
-    """Client for communicating with the Houdini Agent bridge server."""
+    """Client for communicating with the Houdini Agent bridge server.
 
-    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, timeout=DEFAULT_TIMEOUT):
+    When `port` is omitted, auto-discovers a running Houdini via the on-disk
+    registry. Raises ConnectionError with a list of options if multiple live
+    instances exist and none can be matched by `hip_file` against `cwd`.
+    """
+
+    def __init__(self, host=DEFAULT_HOST, port=None, timeout=DEFAULT_TIMEOUT):
+        if port is None:
+            port = self._discover_port(host)
+        self.host = host
+        self.port = port
         self.base_url = f"http://{host}:{port}"
         self.timeout = timeout
+
+    @staticmethod
+    def _discover_port(host):
+        live = _discover_instances(host)
+
+        if not live:
+            raise ConnectionError(
+                "No Houdini bridge servers found. Start the bridge from the "
+                "Houdini Agent panel or scripts/start_server.py, or pass "
+                "port=N explicitly."
+            )
+
+        if len(live) == 1:
+            return live[0]["port"]
+
+        # Multiple instances — prefer one whose hip_file is inside cwd
+        cwd = os.path.abspath(os.getcwd())
+        matches = []
+        for inst in live:
+            hip = inst.get("hip_file") or ""
+            if not hip:
+                continue
+            hip_dir = os.path.dirname(os.path.abspath(hip))
+            if hip_dir and (cwd == hip_dir or cwd.startswith(hip_dir + os.sep)):
+                matches.append(inst)
+        if len(matches) == 1:
+            return matches[0]["port"]
+
+        lines = ["Multiple Houdini bridge servers running. Pass port= explicitly:"]
+        now = time.time()
+        for inst in sorted(live, key=lambda x: -x.get("started_at", 0)):
+            age_min = (now - inst.get("started_at", now)) / 60
+            hip = inst.get("hip_file") or "(unsaved)"
+            lines.append(
+                f"  port={inst['port']}  hip={hip}  pid={inst['pid']}  "
+                f"started {age_min:.0f}m ago"
+            )
+        raise ConnectionError("\n".join(lines))
+
+    @staticmethod
+    def list_instances(host=DEFAULT_HOST, timeout=DISCOVERY_PING_TIMEOUT):
+        """Enumerate live Houdini bridge servers visible to this machine.
+
+        Returns a list of dicts with at least pid, port, started_at, hip_file,
+        houdini_version. Use this when you're not sure which Houdini is which.
+        """
+        return _discover_instances(host=host, timeout=timeout)
 
     def _request(self, method, path, body=None):
         """Send an HTTP request and return the parsed JSON response."""

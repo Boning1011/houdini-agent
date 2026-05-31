@@ -65,6 +65,18 @@ class HoudiniAgentPanel(QtWidgets.QWidget):
         btn_row.addWidget(self._stop_btn)
         layout.addLayout(btn_row)
 
+        # --- Peers (other live Houdinis on this machine) ---
+        peers_label = QtWidgets.QLabel("Other Houdini bridges on this machine:")
+        peers_font = peers_label.font()
+        peers_font.setBold(True)
+        peers_label.setFont(peers_font)
+        layout.addWidget(peers_label)
+        self._peers = QtWidgets.QPlainTextEdit()
+        self._peers.setReadOnly(True)
+        self._peers.setMaximumHeight(80)
+        self._peers.setPlaceholderText("(none)")
+        layout.addWidget(self._peers)
+
         # --- Log area ---
         self._log = QtWidgets.QPlainTextEdit()
         self._log.setReadOnly(True)
@@ -75,7 +87,9 @@ class HoudiniAgentPanel(QtWidgets.QWidget):
         # --- Refresh timer ---
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._update_status)
+        self._timer.timeout.connect(self._update_peers)
         self._timer.start(2000)  # check every 2s
+        self._update_peers()
 
     def _log_msg(self, msg):
         self._log.appendPlainText(msg)
@@ -90,10 +104,20 @@ class HoudiniAgentPanel(QtWidgets.QWidget):
         from bridge import handlers as _handlers
         for mod in [main_thread, _h_exec, scene, parms, geometry, _handlers, server]:
             importlib.reload(mod)
-        port = self._port_spin.value()
+        requested = self._port_spin.value()
         try:
-            server.start_server(port=port)
-            self._log_msg(f"Server started on port {port} (reloaded).")
+            server.start_server(port=requested)
+            actual = (server._server_instance.server_address[1]
+                      if server._server_instance is not None else None)
+            if actual is None:
+                self._log_msg(f"Failed to bind any port near {requested}.")
+            elif actual == requested:
+                self._log_msg(f"Server started on port {actual} (reloaded).")
+            else:
+                self._log_msg(
+                    f"Server started on port {actual} — requested {requested} "
+                    f"was busy (another Houdini holds it)."
+                )
         except Exception as e:
             self._log_msg(f"Failed to start: {e}")
         self._update_status()
@@ -124,6 +148,28 @@ class HoudiniAgentPanel(QtWidgets.QWidget):
             self._start_btn.setEnabled(True)
             self._stop_btn.setEnabled(False)
             self._port_spin.setEnabled(True)
+
+    def _update_peers(self):
+        """Show other live bridge servers — anyone listening on a registry port that isn't us."""
+        try:
+            from bridge.client import _discover_instances
+        except ImportError:
+            return
+        my_port = (server._server_instance.server_address[1]
+                   if server._server_instance is not None else None)
+        try:
+            instances = _discover_instances(timeout=0.5)
+        except Exception:
+            return
+        lines = []
+        import os as _os
+        my_pid = _os.getpid()
+        for inst in sorted(instances, key=lambda x: x.get("port", 0)):
+            if inst.get("pid") == my_pid or inst.get("port") == my_port:
+                continue
+            hip = inst.get("hip_file") or "(unsaved)"
+            lines.append(f":{inst.get('port')}  {hip}  (pid {inst.get('pid')})")
+        self._peers.setPlainText("\n".join(lines))
 
 
 def onCreateInterface():

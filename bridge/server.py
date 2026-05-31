@@ -11,14 +11,44 @@ import hou
 import json
 import os
 import signal
+import socket
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+from bridge import discovery
 from bridge.main_thread import _main_thread_processor
 from bridge.handlers import POST_HANDLERS
 
 DEFAULT_PORT = 8765
+
+
+class _ExclusiveHTTPServer(HTTPServer):
+    """HTTPServer that refuses to share a port with another process.
+
+    Python's stock HTTPServer sets `allow_reuse_address = 1`, which turns on
+    SO_REUSEADDR. On Linux that flag only affects TIME_WAIT. **On Windows it
+    lets multiple processes bind the same port at the same time** — the OS
+    then routes incoming connections to whichever socket it picks, with no
+    error to either side. That is the actual reason two Houdini bridges can
+    both claim ":8765" with no complaint: bind() succeeds for both, our
+    port-fallback never triggers, and external clients hit a random instance.
+
+    Setting SO_EXCLUSIVEADDRUSE (Windows only) before bind makes the second
+    process get EADDRINUSE, which is what we wanted all along. SO_REUSEADDR
+    must stay off — the two flags are mutually exclusive on the same socket.
+    """
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            try:
+                self.socket.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1
+                )
+            except OSError:
+                pass
+        super().server_bind()
 
 # Shared state
 _server_instance = None
@@ -98,7 +128,7 @@ def start_server(port=DEFAULT_PORT, port_search_range=PORT_SEARCH_RANGE):
     for offset in range(port_search_range):
         try_port = port + offset
         try:
-            server = HTTPServer(("127.0.0.1", try_port), HoudiniRequestHandler)
+            server = _ExclusiveHTTPServer(("127.0.0.1", try_port), HoudiniRequestHandler)
             bound_port = try_port
             break
         except OSError as e:
@@ -115,6 +145,8 @@ def start_server(port=DEFAULT_PORT, port_search_range=PORT_SEARCH_RANGE):
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+
+    discovery.register(bound_port)
 
     if bound_port == port:
         print(f"[houdini-agent] Bridge server started on http://127.0.0.1:{bound_port}")
@@ -140,6 +172,7 @@ def stop_server():
         hou.ui.removeEventLoopCallback(_main_thread_processor)
         _server_instance.shutdown()
 
+    discovery.unregister()
     _server_instance = None
     print("[houdini-agent] Server stopped.")
 
@@ -158,14 +191,36 @@ def serve_headless(port=DEFAULT_PORT, poll_interval=0.02):
         print("[houdini-agent] Server already running.")
         return
 
-    server = HTTPServer(("127.0.0.1", port), HoudiniRequestHandler)
+    server = None
+    bound_port = None
+    last_error = None
+    for offset in range(PORT_SEARCH_RANGE):
+        try_port = port + offset
+        try:
+            server = _ExclusiveHTTPServer(("127.0.0.1", try_port), HoudiniRequestHandler)
+            bound_port = try_port
+            break
+        except OSError as e:
+            last_error = e
+            continue
+    if server is None:
+        print(f"[houdini-agent] Could not bind any port in "
+              f"{port}-{port + PORT_SEARCH_RANGE - 1}: {last_error}")
+        return
+
     _server_instance = server
     _headless_stop = threading.Event()
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    print(f"[houdini-agent] Bridge server (headless) on http://127.0.0.1:{port}")
+    discovery.register(bound_port)
+
+    if bound_port == port:
+        print(f"[houdini-agent] Bridge server (headless) on http://127.0.0.1:{bound_port}")
+    else:
+        print(f"[houdini-agent] Bridge server (headless) on http://127.0.0.1:{bound_port} "
+              f"(default {port} was busy)")
     print(f"[houdini-agent] PID {os.getpid()} (SIGINT/SIGTERM to stop)")
     endpoints = ["/status"] + list(POST_HANDLERS.keys())
     print(f"[houdini-agent] Endpoints: {', '.join(endpoints)}")
@@ -185,6 +240,7 @@ def serve_headless(port=DEFAULT_PORT, poll_interval=0.02):
         signal.signal(signal.SIGINT, prev_int)
         signal.signal(signal.SIGTERM, prev_term)
         server.shutdown()
+        discovery.unregister()
         _server_instance = None
         _headless_stop = None
         print("[houdini-agent] Server stopped.")

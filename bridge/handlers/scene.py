@@ -10,10 +10,22 @@ from bridge.main_thread import (
 
 
 def handle_status(_body):
-    """Health check — returns scene info."""
+    """Health check — returns scene info plus process identity for client-side discovery."""
+    import os as _os
+    from bridge import server as _server
+
+    bound_port = None
+    if _server._server_instance is not None:
+        try:
+            bound_port = _server._server_instance.server_address[1]
+        except Exception:
+            pass
+
     def task():
         return {
             "connected": True,
+            "pid": _os.getpid(),
+            "port": bound_port,
             "hip_file": hou.hipFile.path(),
             "houdini_version": ".".join(str(x) for x in hou.applicationVersion()),
             "fps": hou.fps(),
