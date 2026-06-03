@@ -63,14 +63,21 @@ class HoudiniRequestHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, data, status_code=200):
         body = json.dumps(data, default=str).encode("utf-8")
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionError, BrokenPipeError):
+            # Client hung up before we finished writing — common with
+            # probing clients (VS Code extension polling /status, browsers
+            # closing CORS preflights early). Harmless; suppress the noisy
+            # traceback the stdlib handler would otherwise dump to stderr.
+            pass
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length", 0))
