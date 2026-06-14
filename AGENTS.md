@@ -2,68 +2,32 @@
 
 This repo is a toolkit for AI-controlled Houdini operations. You (the AI agent) use the bridge layer to observe, reason about, and act on Houdini scenes.
 
-## Architecture
+## Architecture & Quick Start
 
-```
-AI Agent (VS Code terminal / CLI)
-    ↕ HTTP JSON
-bridge/server.py (runs inside Houdini)
-    ↕ hou module
-Houdini Scene
-```
+`AI agent ↔ HTTP/JSON ↔ bridge/server.py (runs inside Houdini) ↔ hou`. Full setup and the complete API live in `README.md`.
 
-## Quick Start
-
-1. User pastes `scripts/start_server.py` into Houdini's Python Shell (or runs it via shelf tool)
-2. You use `bridge/client.py` to communicate with Houdini
+The user starts the bridge (`scripts/start_server.py` or the panel); you drive it via `bridge/client.py`:
 
 ```python
 from bridge.client import HoudiniClient
-h = HoudiniClient()            # auto-discovers the running Houdini (see "Multiple Houdinis" below)
-h.status()                     # health check
-h.exec("hou.node('/obj').createNode('geo')")
-tree = h.get_node_tree("/obj")
-parms = h.get_parms("/obj/geo1")
-
-# Execute with post-exec verification
-h.exec("node.parm('tx').set(5)", verify=["/obj/geo1"])
-# → {"result": None, "verify": {"/obj/geo1": {errors, geo, parms, cook_time}}}
-
-# Capture viewport screenshot (returns path, then Read it to see the image)
-img = h.screenshot()           # → {"path": "...", "width": 1280, "height": 720}
-
-# Batch: multiple ops in one round-trip, one undo group
-h.batch([
-    {"code": "geo = hou.node('/obj').createNode('geo', 'my_geo')"},
+h = HoudiniClient()                                    # auto-discovers; pass port=N if multiple instances
+h.exec("node.parm('tx').set(5)", verify=["/obj/geo1"])  # exec + post-edit health check, one round-trip
+h.batch([                                              # multi-op, one round-trip, one undo group
+    {"code": "geo = hou.node('/obj').createNode('geo','my_geo')"},
     {"code": "hou.node('/obj/my_geo').createNode('box')"},
     {"code": "hou.node('/obj/my_geo').layoutChildren()", "verify": ["/obj/my_geo"]},
 ])
 ```
 
-## Bridge API
+## Bridge API (cheatsheet — full signatures in `bridge/client.py`)
 
-| Method | Description |
-|---|---|
-| `status()` | Health check — returns server info |
-| `exec(code, verify=[...])` | Execute Python in Houdini; optionally verify node health after |
-| `batch(ops, stop_on_error)` | Execute multiple code snippets in one round-trip (single undo group) |
-| `query(expression)` | Evaluate a Python expression and return the result |
-| `get_node_tree(path)` | Get node hierarchy as nested dict |
-| `scene_snapshot(path, depth)` | Rich snapshot — nodes, connections, non-default parms, flags, errors |
-| `node_info(node_path)` or `node_info(paths=[...])` | Full node info (MMB popup) — cook time, geo counts, attribs, memory, bbox. Batch mode for multiple nodes in one round-trip |
-| `get_parms(node_path)` | Get all parameters of a node |
-| `set_parms(node_path, parms)` | Set parameters on a node |
-| `attrib_info(node_path)` or `attrib_info(paths=[...])` | Geometry overview — counts + attrib names/types. Batch mode for multiple nodes in one round-trip |
-| `attrib_stats(node_path, attribs, attrib_class, samples)` | Value stats (min/max/mean/samples) for specific attributes |
-| `attrib_values(node_path, attribs, attrib_class, start, count, stride, reverse)` | Read sampled attribute values with flexible pagination |
-| `ui_state()` | What the user sees: selected nodes, network editor path, current frame |
-| `screenshot(output, width, height)` | Capture viewport as PNG — returns file path you can `Read` to see the image |
-| `create_node(parent, type, name)` | Create a node |
-| `delete_node(path)` | Delete a node — **requires user confirmation** |
-| `backup(directory)` | Save a timestamped .hip backup (default: `$HIP/.agent_backups/`) |
-| `list_backups(directory)` | List available .hip backups, newest first |
-| `restore_backup(path)` | Load a .hip backup — **requires user confirmation** |
-| `undo_history(limit)` | Get log of agent's mutating operations |
+- **Write:** `exec(code, verify=[paths])`, `batch(ops, stop_on_error)`, `create_node`, `set_parms`, `delete_node` (confirm)
+- **Read scene:** `status()`, `ui_state()`, `scene_snapshot(path, depth)`, `node_info(path | paths=[...])`, `get_node_tree`, `get_parms`, `query(expr)`
+- **Read geometry (progressive):** `attrib_info(path | paths=[...])` → `attrib_stats` → `attrib_values`
+- **Visual:** `screenshot()` → then `Read` the returned path to see the image
+- **Safety:** `backup()`, `list_backups()`, `undo_history()`, `restore_backup` (confirm)
+
+`node_info` and `attrib_info` accept `paths=[...]` to read many nodes in one round-trip.
 
 ## Progressive Inspection — Don't Over-Fetch
 
@@ -137,22 +101,15 @@ Before answering any Houdini-related question or writing Houdini Python code, **
 - KineFX → read `context/kinefx-patterns.md`
 - hou module, thread safety → read `context/houdini-python.md`
 
-If unsure which doc is relevant, scan all of them. The cost of reading a file is near zero; the cost of a wrong answer is high.
+Read **only the one doc** that matches the task. If none clearly matches, proceed without reading — do **not** read context docs "just in case" (reading all of them is ~16k tokens). Reach for another only when you actually hit something you can't resolve. When you delegate to a subagent, name the exact doc it should read (or tell it none is needed) — don't let it discover by scanning.
 
 ## Quick Actions — Zero Hesitation
 
 When the user asks you to "look at", "check", or "see" something, act immediately using the Bridge API above. Do not search the codebase for how to call these methods — just use them directly. You have vision: capture a screenshot, read the image, and respond.
 
-## Network Construction Style — Split for Humans, Not Just AI
+## Network Construction Style
 
-The network is read by humans weeks after you build it. **Looking at the network alone should tell a human what operations exist** — they should only need to open VEX to see *how* a specific operation works, never *what* operations live in the graph.
-
-- **One Wrangle = one coherent operation.** A long VEX block is fine if it's one focused job (e.g., computing an OBB axis permutation). Don't fragment that into tiny wrangles.
-- **Never mix unrelated logic** into a single Wrangle. Hiding a `setprimgroup`, an `attribdelete`, or an unrelated color computation inside a math wrangle makes the network un-readable later. The user will not remember it's in there.
-- **Use dedicated SOPs for simple operations** even if a wrangle could do it in one line: `Group Create` for groups, `Attribute Delete` for removing attribs, `Blast`/`Group Promote`/etc. for routing. The node's name is the documentation.
-- **Don't over-split either.** Three single-line wrangles back-to-back is worse than one well-named wrangle that does a coherent thing. Aim for clarity, not maximal fragmentation.
-
-Rule of thumb: if a future reader would need to open VEX to figure out *what operations exist in this branch*, you split it wrong. Pull the standalone operations out into their own named nodes.
+Build networks a human can read at a glance: **one node = one clear operation**, named so its purpose is obvious without opening VEX; never hide unrelated logic inside a wrangle; use dedicated SOPs (`Group Create`, `Attribute Delete`, `Blast`) over one-line wrangles. Full rules in `context/network-layout.md`.
 
 ## Skills
 
@@ -174,6 +131,7 @@ Reference material for Houdini-specific knowledge:
 - `context/cops-python-snippet.md` — `cop/pythonsnippet` API (kwargs / return-dict / ImageLayer), HDA-wrapping pitfalls
 - `context/operation-patterns.md` — scene reading strategy, VEX gotchas, undo API, context retrieval
 - `context/network-layout.md` — node positioning, network boxes, layout workflow
+- `context/multi-agent-orchestration.md` — running parallel subagents (one instance = one writer)
 
 Consult these before writing Houdini Python code.
 
@@ -187,21 +145,7 @@ Consult these before writing Houdini Python code.
 
 ## Session Reflection — Self-Evolution Loop
 
-After completing significant work (multi-step Houdini tasks, debugging sessions, HDA development), write a reflection to `reflections/YYYY-MM-DD-brief-topic.md`. See `reflections/_TEMPLATE.md` for the format.
-
-**When to reflect:**
-- After any session where you hit friction, made detours, or discovered something new
-- When the user explicitly asks
-- At the end of a long session with 3+ distinct tasks
-
-**What makes a good reflection:**
-- The **Toolkit Improvement Opportunities** section is the most important — it's what drives actual changes to the codebase
-- Be brutally specific in **Waste Analysis** — name exact API calls, count round-trips, estimate context cost
-- **Critical Path** should be a reproducible recipe: "if I had to redo this from scratch, here's the minimum steps"
-
-**What to do with reflections:**
-- Reflections accumulate in `reflections/`. Periodically, the user (or agent) reviews them in batch to identify recurring friction and prioritize toolkit improvements.
-- If a pattern appears in 2+ reflections, it should become a concrete change: a new context doc, a skill, an API improvement, or an AGENTS.md update.
+After significant work (multi-step tasks, debugging, HDA dev) — or when asked, or after friction/detours — write a reflection to `reflections/YYYY-MM-DD-topic.md` (format in `reflections/_TEMPLATE.md`). The high-value parts: **Toolkit Improvement Opportunities** (what should change in the codebase) and a specific **Waste Analysis** (exact calls, round-trip counts, context cost). A pattern seen in 2+ reflections should become a concrete change — a context doc, skill, API improvement, or AGENTS.md update.
 
 ## Key Technical Notes
 

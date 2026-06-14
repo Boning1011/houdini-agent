@@ -124,3 +124,14 @@ The main column is NOT a rigid straight line. It shifts slightly left/right to s
 - **Orphans far to the side** — in their own network box labeled "Unused"
 - **Don't touch nodes you didn't analyze** — if a node isn't in your position map, leave it
 - **Never call `layoutChildren()` on the whole network** — only on specific node subsets
+
+## Construction Style — Split for Humans, Not Just AI
+
+The network is read by humans weeks later. **Looking at the network alone should tell a human what operations exist** — they should only need to open VEX to see *how* an operation works, never *what* operations live in the graph.
+
+- **One Wrangle = one coherent operation.** A long VEX block is fine if it's one focused job (e.g., computing an OBB axis permutation). Don't fragment that into tiny wrangles.
+- **Never mix unrelated logic** into a single Wrangle. Hiding a `setprimgroup`, an `attribdelete`, or an unrelated color computation inside a math wrangle makes the network unreadable later — the user won't remember it's in there.
+- **Use dedicated SOPs for simple operations** even if a wrangle could do it in one line: `Group Create` for groups, `Attribute Delete` for removing attribs, `Blast`/`Group Promote`/etc. for routing. The node's name is the documentation.
+- **Don't over-split either.** Three single-line wrangles back-to-back is worse than one well-named wrangle that does a coherent thing. Aim for clarity, not maximal fragmentation.
+
+Rule of thumb: if a future reader would need to open VEX to figure out *what operations exist in this branch*, you split it wrong.
