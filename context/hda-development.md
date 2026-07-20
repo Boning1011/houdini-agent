@@ -222,6 +222,64 @@ independently; that one CAN be turned off.
   pattern: hub → in0, internal default → in1. Verified working inside a locked
   Cop HDA.
 
+### Building a begin/end sim-block HDA pair (RD/pyro/ripple style, H22)
+
+To split a COP simulation into two HDAs with an open user-editable middle
+(like `reactiondiffusion_block_begin/end`), four things must ALL be right —
+each failure mode below was hit building `boning::flow_lenia_block_*`:
+
+1. **`hda_type` declaration is the master switch.** The begin/end HDAs'
+   DialogScript must contain `hda_type block_begin` / `hda_type block_end`
+   (indented line after `label`). Without it the raw `block_end simulate=1`
+   inside errors "Cannot do simulate if the block doesn't have a begin node
+   at the same level" — the raw block nodes live in different HDAs, and only
+   this declaration makes the compiler treat the HDA instances as the
+   region boundary. It also registers pairing (`coppairednode("<end>")`
+   hscript fn returns the begin path) and turns `blockpath` into a native
+   reserved parm on the begin type — adding your own 'blockpath' template
+   then fails with "Reserved parameter 'blockpath' already exists".
+2. **Pairing wiring**: begin HDA exposes `blockpath` (native, empty default);
+   the inner raw block_begin's blockpath is the literal string
+   `` `chsop("../blockpath")`/<inner_end_name> `` — chsop expands the
+   node reference to an absolute path. Users (or the tab tool) set
+   begin.blockpath = '../<end_instance>'. There is NO auto-pairing.
+3. **Hand-author the DS IO lines.** createDigitalAsset generates
+   `input input1 src / output output1 dst / signature default Default
+   { RGBA } { RGBA }` — the RGBA boundary signature type-mismatches any
+   non-RGBA port ("Type mismatch at input N on <inner node>"). Replace with
+   named lines (`input mass mass`, `output flow flow`, ...) and a real
+   signature: `signature default Default { Mono Mono UV } { Mono UV ... }`
+   (first brace-list = input types in order, second = outputs; type names
+   as in the constant COP signature menu: Mono/UV/RGB/RGBA/...).
+4. **Every `setParmTemplateGroup` regenerates the DialogScript and wipes
+   hda_type + IO + signature lines.** Re-inject them after ANY parm edit
+   (keep a fix-headers script; verify with `'hda_type' in ds`).
+
+Also: external references (a set blockpath) block createDigitalAsset —
+clear the parm or pass `ignore_external_references=True`. And a converted
+master instance stays UNLOCKED; sim-block behavior only engages on locked
+instances (`matchCurrentDefinition()`), so always test with a fresh locked
+instance, not the conversion leftover.
+
+Paired tab-creation is NOT native: the official pairs' Tools.shelf scripts
+are plain genericTool. Write the begin HDA's Tools.shelf script to create
+both nodes, wire them, and set blockpath (`coptoolutils.genericTool` for
+the begin, `parent.createNode` for the end).
+
+For wires the user adds in the open middle: any data entering the region
+from outside must route through extra block_begin ports — expose aux
+passthrough ports (begin inputs → raw block_begin ports → begin outputs)
+or the user's mid-block graph fails to compile.
+
+### Cop createDigitalAsset input counts: verify, don't trust
+
+`min_num_inputs`/`max_num_inputs` args can be silently overridden by the
+number of externally wired inputs at conversion time (observed: passed
+max 3, stored max 1). After creation, check `type().maxNumInputs()` and fix
+via `defn.setMinNumInputs/setMaxNumInputs` + save — then RE-CREATE instances
+(existing ones keep the old connector set and reject `setInput` with
+"Invalid input").
+
 ### Do NOT promote ramp parms into Cop OpenCL HDAs
 
 Two independent breakages, both silent (kernel reads garbage, usually black):
