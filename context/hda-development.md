@@ -196,8 +196,68 @@ and rely on downstream cleanup if you don't want it in the final output.
 The `usetotalattrib` toggle controls the detail-attribute output
 independently; that one CAN be turned off.
 
+## Copernicus (Cop) HDA specifics (H22, learned building boning::flow_lenia)
+
+### IO is declared via hub nodes + operator min/max — BOTH matter
+
+- A Cop subnet's ports come from **single hub nodes**: one `input`-type node
+  (its output k = asset input k) and one `output`-type node (its input k =
+  asset output k). NOT one node per port. Fresh Cop subnets auto-create hubs
+  named `inputs`/`outputs`; `collapseIntoSubnet` does **not** — add them.
+  Hubs expose 2048 virtual connectors; count comes from what's wired.
+- The operator type ALSO declares `minNumInputs/maxNumInputs/maxNumOutputs`.
+  **Pass `min_num_inputs`/`max_num_inputs` to `createDigitalAsset()` at
+  creation time.** Declaring inputs post-hoc (`defn.setMaxNumInputs` + save +
+  reload) makes connectors *appear* and wire without error, but the input hub
+  passes NO data — downstream OpenCL errors "Missing layer on input" /
+  "@x was not bound" on a fresh instance. Only a clean re-create of the asset
+  (copy network to a new subnet with auto-hubs, uninstall + delete file in
+  separate exec ticks, `createDigitalAsset` with the right args) fixed it.
+- Outputs were more forgiving: creation derived 1 output despite 2 wired hub
+  inputs; post-hoc `defn.setMaxNumOutputs(2)` + `defn.save()` produced a
+  working second port. If a "working" port carries all-zero data, suspect the
+  DATA (e.g. a black colormap) before declaring the port dead — we burned a
+  rebuild on that misread.
+- `switchifwired` (rule `firstwire`) + input hub is the standard optional-input
+  pattern: hub → in0, internal default → in1. Verified working inside a locked
+  Cop HDA.
+
+### Do NOT promote ramp parms into Cop OpenCL HDAs
+
+Two independent breakages, both silent (kernel reads garbage, usually black):
+
+1. `inner.parm('cmap').set(hda.parm('cmap'))` links only the multiparm COUNT.
+   Per-key channels (`cmap2cr`, ...) stay static — `evalAsRamp()` on the parm
+   *looks* correct (it follows the top-level reference), but the OpenCL
+   binding reads the dead per-key values. Diagnosis that finally caught it:
+   compare `parm.evalAsString()` per KEY against `getReferencedParm()`.
+2. `hou.copyNodesTo` breaks the multiparm channel refs inside the opencl
+   `bindings` entry itself (ramp keys 2..N materialize as static zeros).
+   Repair: re-run `vexpressionmenu.createSpareParmsFromOCLBindings` (after
+   `parm('bindings').set(0)` to clear the dead entry), which re-links
+   binding ramp ↔ spare parm with proper multiparm references.
+
+Robust alternative used in flow_lenia: bake colormaps into the kernel as
+polynomial fits (viridis/magma) behind an int `preset` parm — int/float parms
+link via plain `ch("../x")` with none of this fragility. Keep real ramps
+internal to the HDA.
+
 ## Bridge Execution Tips
 
 - **`query()` = single expression** (returns value), **`exec()` = multi-line code** (returns None on success).
 - **Avoid triple quotes and `\n` in inline code strings** — they cause escaping nightmares across Python→bridge→Houdini. For multi-line Houdini code, write to a temp file and use `hou.readFile()`, or build strings with `chr(10)` for newlines.
 - **Testing button callbacks**: Simulate by exec'ing the same code the callback would run, in a bridge `exec()` call. This catches errors before the user clicks.
+- **NEVER define functions inside a bridge `exec()` string.** The bridge runs your code with split globals/locals, so a nested `def` can't see module-level names/builtins reliably — symptoms are bizarre (`parm.set(2)` works at top level but raises the SWIG `map<string,string>` overload error from inside a helper). Build flat: inline the repeated logic, or write a real `.py` file and load it into a Python SOP via `hou.readFile()`.
+- **Non-ASCII bytes break `parm.set(str)`.** `HOM_Parm._set` with a string containing any byte >127 (e.g. an em-dash `—` = 0x97 written by Windows `open(f,'w')` in cp1252) fails to bind to `char*` and SWIG falls through to the `std::map<string,string>` overload, raising `TypeError: argument 2 of type 'std::map<...>'`. Keep VEX/PythonModule files pure ASCII; when writing files for Houdini use `open(f,'wb')` with `.encode('ascii')` or pass `encoding='utf-8'` and avoid smart-dashes.
+- **AttribWrangle `class` parm is an int menu**, not a string: `0=detail, 1=primitive, 2=point, 3=vertex`. Setting the wrong one silently changes behavior — a per-point setup wrangle left at `class=0` (detail) runs ONCE, so per-point `@orient`/`@variant`/`removepoint` never apply and downstream copy-to-points falls back to defaults (looks like it "works" but every instance is variant 0).
+
+## Memory-Light Instancing: pack-by-name + Copy to Points
+
+To instance a small asset library across thousands of points so geometry is shared in memory:
+
+1. Build each prop once, tag a per-prop int id (e.g. `i@variant`) and a `s@name`.
+2. **Pack SOP**: `packbyname=1`, `nameattribute='name'`, and set **`transfer_attributes='variant cat ...'`** — without listing the id attribute here it does NOT survive onto the packed prims (they all read 0, and matching collapses). One packed prim per name.
+3. Target points carry the same int id (`i@variant`).
+4. **Copy to Points** (this H21 build has no "piece attribute" parm): set **`useidattrib=1`, `idattrib='variant'`, `transform=1`, `pack=1`**. Each target point gets the source piece whose id matches; `pack=1` keeps results as packed instances (shared geometry).
+
+Multi-level: pack props (L1) → copy-to-points packed instances (L2) → optional final Pack of the whole build into one packed prim (L3) for city-scale placement.
