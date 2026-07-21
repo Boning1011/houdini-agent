@@ -243,6 +243,13 @@ each failure mode below was hit building `boning::flow_lenia_block_*`:
    `` `chsop("../blockpath")`/<inner_end_name> `` — chsop expands the
    node reference to an absolute path. Users (or the tab tool) set
    begin.blockpath = '../<end_instance>'. There is NO auto-pairing.
+   Bonus: put ALL user parms on the END node (RD convention — one panel)
+   and have begin's inner nodes read them through the pairing:
+   `ch(chsop("../blockpath")/parmname)` (verbatim official RD pattern;
+   "../blockpath" is begin's own parm as seen from the inner node).
+   Also expose the raw block_end's native `iterations` parm — it reruns
+   the whole begin→middle→end region N times per frame (substeps),
+   including any user nodes inserted in the open middle.
 3. **Hand-author the DS IO lines.** createDigitalAsset generates
    `input input1 src / output output1 dst / signature default Default
    { RGBA } { RGBA }` — the RGBA boundary signature type-mismatches any
