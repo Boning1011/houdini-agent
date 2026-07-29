@@ -8,15 +8,20 @@ from contextlib import redirect_stdout
 import hou
 from bridge.main_thread import (
     _run_on_main_thread,
-    _with_undo,
-    _log_operation,
+    run_mutation,
     _exec_namespace,
 )
 
 
 def _extract_last_expr(code):
-    """If the last statement is an expression, return (setup_code, expr_code).
-    Otherwise return (code, None)."""
+    """If the last statement is an expression, return (setup, expr) where setup
+    is a compiled code object of everything before it (or None) and expr is a
+    compiled eval-mode code object of the expression.  Otherwise (code, None).
+
+    Compiling the AST nodes directly (instead of slicing source by line number)
+    keeps semicolon-separated statements intact — `a = 1; a` used to drop the
+    assignment because both statements share one line.  exec()/eval() accept
+    both strings and code objects, so callers need no special-casing."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -27,15 +32,11 @@ def _extract_last_expr(code):
 
     last = tree.body[-1]
     if isinstance(last, ast.Expr):
-        if len(tree.body) == 1:
-            setup = ""
-        else:
-            lines = code.split("\n")
-            setup = "\n".join(lines[: last.lineno - 1])
-        expr = ast.get_source_segment(code, last.value)
-        if expr is None:
-            lines = code.split("\n")
-            expr = "\n".join(lines[last.lineno - 1 :]).strip()
+        setup = None
+        if len(tree.body) > 1:
+            setup = compile(ast.Module(body=tree.body[:-1], type_ignores=[]),
+                            "<bridge>", "exec")
+        expr = compile(ast.Expression(last.value), "<bridge>", "eval")
         return setup, expr
 
     return code, None
@@ -126,10 +127,10 @@ def handle_exec(body):
         setup_code, expr_code = _extract_last_expr(code)
         try:
             with redirect_stdout(stdout_buf):
-                if setup_code:
-                    exec(compile(setup_code, "<bridge>", "exec"), _exec_namespace)
-                if expr_code:
-                    result_value = eval(compile(expr_code, "<bridge>", "eval"), _exec_namespace)
+                if setup_code is not None and setup_code != "":
+                    exec(setup_code, _exec_namespace)
+                if expr_code is not None:
+                    result_value = eval(expr_code, _exec_namespace)
         except Exception:
             error_str = traceback.format_exc()
 
@@ -147,8 +148,7 @@ def handle_exec(body):
         return resp
 
     label = f"Agent: exec {code[:50]}"
-    r = _run_on_main_thread(_with_undo(label, task))
-    _log_operation("/exec", label, r.get("ok", False))
+    r = run_mutation("/exec", label, task, spotlight=verify_paths)
     if r.get("ok"):
         return r["value"], 200
     return {
@@ -207,8 +207,8 @@ def handle_batch(body):
         return results
 
     label = f"Agent: batch ({len(ops)} ops)"
-    r = _run_on_main_thread(_with_undo(label, task))
-    _log_operation("/batch", label, r.get("ok", False))
+    all_verify = [p for op in ops for p in (op.get("verify") or [])]
+    r = run_mutation("/batch", label, task, spotlight=all_verify or None)
     if r.get("ok"):
         return {"success": True, "results": r["value"]}, 200
     return {"success": False, "error": r.get("error") or r.get("traceback", "Unknown error")}, 500
