@@ -110,6 +110,35 @@ Moved to dedicated doc: `context/opencl-patterns.md` — binding reference, sile
 
 **Never batch-create multiple HDA instances in rapid succession.** HDAs can trigger dependency loading (NAS paths, other HDAs) that blocks Houdini's main thread or crashes it. Create one at a time with verification between each.
 
+## Long-running work: the bridge waits only 30s for the main thread
+
+`_run_on_main_thread(task, timeout=30)` in `bridge/main_thread.py` is hard-coded
+to 30 seconds. Anything slower (parameter sweeps, multi-frame sim cooks, batch
+renders) returns `"Timed out waiting for main thread execution"` — **but the task
+keeps running to completion on Houdini's main thread**. The error is a false
+negative, and re-issuing the call just queues a duplicate behind the first.
+
+Pattern for jobs that legitimately exceed 30s: have the in-Houdini script write
+its result to a JSON file, then treat the timeout as "still working" and poll:
+
+```python
+try:
+    h.exec("run_job('%s/job.json', '%s/out.json')" % (S, S))
+except RuntimeError as e:
+    if "Timed out" not in str(e):
+        raise
+    while time.time() < deadline:          # the task is still going
+        if os.path.exists(out) and json.load(open(out)):   # complete + valid
+            break
+        time.sleep(2)
+```
+
+This turned a 900-candidate parameter sweep into a handful of resumable batches.
+Alternative: chunk the work so each `exec` stays under 30s (more round-trips,
+but you get progress reporting for free). Never let a sweep block the main
+thread for minutes at a time when the user might be interacting with Houdini —
+chunking also gives them a window to interrupt.
+
 ## Context Retrieval
 
 - `scene_snapshot(path, depth)` is the primary tool — one call returns nodes, connections, non-default parms, flags, errors

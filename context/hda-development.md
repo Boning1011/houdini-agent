@@ -307,6 +307,55 @@ polynomial fits (viridis/magma) behind an int `preset` parm — int/float parms
 link via plain `ch("../x")` with none of this fragility. Keep real ramps
 internal to the HDA.
 
+## Preset menus on an HDA (ordinal parm + PythonModule)
+
+The standard pattern — an ordinal `preset` parm whose callback applies a dict of
+parm values — has three traps, all hit while extending `boning::flow_lenia_block_end`:
+
+1. **An ordinal parm stores the INDEX, not the token.** Reordering menu entries
+   silently repoints every saved scene at a different preset. If you must
+   reorder, capture each instance's `parm.evalAsString()` token BEFORE the
+   change and re-set `parm.set(new_order.index(token))` after — and keep the old
+   index-0 entry at index 0 so the asset default doesn't change. Warn the user
+   that scenes saved earlier still need one visual check.
+2. **A preset dict must write EVERY parm it depends on.** Any key it omits is
+   inherited from whatever preset was selected before, so the same preset gives
+   different results depending on history (in flow-lenia, 7 presets omitted
+   `bmass` and came out at 1.2x their validated mass after visiting a preset
+   that set 1.2). Diff the union of all preset keys against each dict and assert
+   nothing is missing. Values equal to the parm default still belong in the
+   dict — that is what makes switching deterministic.
+3. **A preset that changes a sim's regime should reset the sim.** Otherwise it
+   continues from an unrelated cached state and looks broken until the user
+   finds the Reset button: `node.node('sim_end').parm('resimulate').pressButton()`.
+
+`parm.set()` does NOT fire the parm's `script_callback` — handy: you can fix an
+instance's menu index without applying the preset over the user's custom values
+(verified: dt/growth/iterations survived a remap untouched).
+
+### Menu entries can carry icons
+
+`hou.MenuParmTemplate.setIconNames((...))` accepts **absolute image paths**, not
+just built-in icon names, so a preset menu can show a thumbnail per entry.
+Verify a path resolves through Houdini's icon system before shipping:
+
+```python
+hou.qt.Icon("C:/.../preset_icons/lenia_maze.png").isNull()   # False = will render
+```
+
+Store the images next to the `.hda` and derive the path from
+`defn.libraryFilePath()`. Put the same information in the label text too
+(`"Maze Cells   |   ROAM 0.54   |   maze interiors, drifting"`) — labels always
+render, and they keep the menu readable if the icon files ever go missing.
+
+### `setParmTemplateGroup` and the block-HDA DialogScript headers
+
+The note above says every `setParmTemplateGroup` wipes `hda_type` / `input` /
+`output` / `signature`. On 22.0.368 those lines **survived** two full
+regenerations (menu edit + two new parms). Don't rely on either behaviour:
+capture the header lines verbatim first, re-inject them only `if "hda_type" not
+in ds`, and assert all four are present after saving. Cheap either way.
+
 ## Bridge Execution Tips
 
 - **`query()` = single expression** (returns value), **`exec()` = multi-line code** (returns None on success).

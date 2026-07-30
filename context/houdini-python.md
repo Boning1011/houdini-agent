@@ -173,3 +173,75 @@ hou.setFrame(24)
 # Frame range
 hou.playbar.frameRange()           # (start, end)
 ```
+
+## Copernicus (H22) — reading COP data from any Python context
+
+Verified on 22.0.368. New-style COP nodes are `hou.CopNode`; the data API is
+small but complete:
+
+```python
+cop = hou.node("/obj/copnet1/copnet1/OUT")
+layer = cop.layer(0)            # hou.ImageLayer — cooks the COP at the CURRENT frame
+vdb   = cop.vdb(0)              # hou.NanoVDB, when the wire carries a VDB
+cs    = cop.outputCableStructure(0)   # wireCount()/wireName(i)/wireDataType(i)
+```
+
+- `layer()` / `vdb()` cook on demand and return frozen snapshots — this is the
+  COP→SOP data bridge. Calling it inside a Python SOP cook works fine and is
+  the easiest way to pull Copernicus pixels into geometry per frame.
+- Decode layers per `storageType()` (Float32/Float16/UNorm8) exactly as in
+  cops-python-snippet.md; `bufferResolution()` + `channelCount()` shape the
+  numpy view. Mono noise = 1 channel.
+- **`layerAtFrame(frame, output_index)`** is the animated sibling of `layer()` —
+  the way to sample a COP sim over time without touching the playbar.
+- **`allBufferElements()` hands back raw BYTES, not floats.** Iterating it
+  yields ints 0..255, so any metric built that way is silently garbage. The
+  tell: `max` lands on exactly 255 and "fraction of pixels above X" exceeds 1.0
+  (the byte count is 4x the pixel count). Always
+  `np.frombuffer(lyr.allBufferElements(), np.float32).reshape(h, w, channels)`.
+  `computeMin/computeMax/computeAverage()` give sane scalars with no decoding —
+  use them to sanity-check a decode.
+- **Houdini ships numpy AND PIL** (22.0.368: PIL 12.1) so metrics and even
+  contact-sheet composition can run in-process. A pure-Python loop over a 512²
+  layer costs ~1 s per frame; the numpy version is milliseconds — that
+  difference decides whether a parameter sweep is 3 minutes or 3 hours.
+- **Cook sims sequentially.** Jumping straight to `layerAtFrame(N)` after
+  changing parms can return a stale cached frame. Loop
+  `for f in range(1, N + 1): node.layerAtFrame(f, i)` and read the last.
+  Symptom of getting this wrong: every parameter variant reports byte-identical
+  stats (or a mass/energy total that belongs to the previous variant).
+  A sim block's inner `block_end` has a `resimulate` button —
+  `inner.parm('resimulate').pressButton()` forces a clean restart.
+- **Do NOT use `rop_image` to grab a few frames of a COP sim block.** Even with
+  `trange`/`f1`/`f2` pinned to a single frame it cooked the entire scene frame
+  range (3000 frames) and then died with "Cook error in input: <node> /
+  Cooking was interrupted". Dump the layer buffer to a file instead — the
+  `layerAtFrame` + `np.frombuffer` + `tofile` path is faster and predictable.
+- `hou.ImageLayer` is strictly 2D (`setDataWindow(x, y, w, h)`). The 3D type
+  in COPs is NanoVDB; from Python you can only `setFromRawNanoVDB` — building
+  volumes is far easier SOP-side (`geo.createVolume(...)` +
+  `volume.setAllVoxelsFromString(np_array.tobytes())`, x-fastest C order).
+- `timepack` COP packs a frame range into one cable with N wires
+  (one per frame, named by time prefix/suffix) — visible via
+  `outputCableStructure`. Node-type `parmTemplates()` names can differ from
+  instance parm names (tuples split: `absrangeframe` → `absrangeframe1/2`);
+  create an instance to see the truth.
+- `vdbfromlayer` COP samples a 2D layer onto an existing VDB's voxels via a
+  position input (inputs: vdb_ref / layer / pos) — it is NOT "image → VDB".
+
+Viewport gotchas hit while verifying volumes:
+- When the network editor is inside a copnet, the Scene Viewer draws the COP
+  display node as a flat image plane at the origin — it can hide or interleave
+  with real geometry. `pane.setPwd(hou.node('/obj/geo'))` re-points the viewer.
+- A dense fog volume with density ~1 reads as a solid white block from every
+  angle; screenshots look "frozen". Don't tune densityscale blindly — convert
+  to an isosurface (`convertvolume` SOP) for an unambiguous structure check.
+- Screenshots after exec need the event loop to repaint: separate the exec and
+  screenshot calls and sleep ~2s between them.
+
+## Making a Python SOP time-dependent
+
+A Python SOP does not re-cook per frame just because its code calls
+`hou.frame()`. Add a hidden spare parm with default expression `$F` and
+`node.evalParm(...)` it in the cook — parameter evaluation creates the
+dependency. Same trick applies to any expression-driven invalidation.
