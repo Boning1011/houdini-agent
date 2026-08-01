@@ -21,10 +21,12 @@ h.batch([                                              # multi-op, one round-tri
 
 ## Bridge API (cheatsheet — full signatures in `bridge/client.py`)
 
-- **Write:** `exec(code, verify=[paths])`, `batch(ops, stop_on_error)`, `create_node`, `set_parms`, `delete_node` (confirm)
-- **Read scene:** `status()`, `ui_state()`, `scene_snapshot(path, depth)`, `node_info(path | paths=[...])`, `get_node_tree`, `get_parms`, `query(expr)`
+- **Write:** `exec(code, verify, return_expr, observe, detailed)`, `batch(ops, stop_on_error)`, `create_node`, `set_parms`, `delete_node` (confirm)
+- **Read scene:** `status()` (runtime capabilities), `ui_state()`, `scene_snapshot(path, depth)`, `observe_scene(path, depth, since)`, `node_info(path | paths=[...])`, `get_node_tree`, `get_parms`, `query(expr)`
 - **Read geometry (progressive):** `attrib_info(path | paths=[...])` → `attrib_stats` → `attrib_values`
-- **Visual:** `screenshot()` → then `Read` the returned path to see the image
+- **Large results:** `evaluate(expr)` → `read_artifact(...)` / `read_artifact_all(...)`
+- **Long work:** `start_job(code)` → `job_status` / `wait_job` / `cancel_job`
+- **Visual:** `capture("network_editor" | "parameters" | "desktop")` or `screenshot()` → then `Read` the returned path
 - **Safety:** `backup()`, `list_backups()`, `undo_history()`, `restore_backup` (confirm)
 
 `node_info` and `attrib_info` accept `paths=[...]` to read many nodes in one round-trip.

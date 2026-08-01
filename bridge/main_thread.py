@@ -108,7 +108,7 @@ def run_mutation(endpoint, label, task, spotlight=None):
     """
     wrapped = _with_undo(label, _with_feedback(label, spotlight, task))
     r = _run_on_main_thread(wrapped)
-    _log_operation(endpoint, label, r.get("ok", False))
+    r["receipt"] = _log_operation(endpoint, label, r.get("ok", False))
     return r
 
 
@@ -128,15 +128,17 @@ def _log_operation(endpoint, label, success):
     """
     global _op_seq
     _op_seq += 1
-    _operation_log.append({
+    entry = {
         "seq": _op_seq,
         "timestamp": _time.strftime("%Y-%m-%d %H:%M:%S"),
         "endpoint": endpoint,
         "label": label,
         "success": success,
-    })
+    }
+    _operation_log.append(entry)
     if len(_operation_log) > _MAX_LOG_SIZE:
         del _operation_log[:len(_operation_log) - _MAX_LOG_SIZE]
+    return dict(entry)
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +151,10 @@ _MAX_ACTIVITY = 300
 _activity_seq = 0
 
 # Endpoints worth surfacing as "writes" (coloured differently in the panel).
-_WRITE_ENDPOINTS = {"/exec", "/batch", "/create_node", "/delete_node", "/set_parms"}
+_WRITE_ENDPOINTS = {
+    "/exec", "/batch", "/create_node", "/delete_node", "/set_parms",
+    "/job/start", "/job/cancel",
+}
 
 
 def summarize_request(path, body):

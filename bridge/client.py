@@ -11,6 +11,7 @@ Usage:
     h.exec("hou.node('/obj').createNode('geo')")
 """
 
+import base64
 import json
 import os
 import time
@@ -155,7 +156,12 @@ class HoudiniClient:
         """Health check. Returns scene info dict with hip_file, houdini_version, fps, etc."""
         return self._get("/status")
 
-    def exec(self, code, verify=None):
+    def capabilities(self):
+        """Return runtime-discovered bridge/Houdini capabilities."""
+        return self.status().get("capabilities", {})
+
+    def exec(self, code, verify=None, return_expr=None, observe=None,
+             artifact_threshold=None, detailed=False):
         """Execute Python code in Houdini and return the result value.
 
         The last expression in the code is automatically captured and returned.
@@ -166,6 +172,15 @@ class HoudiniClient:
             verify: Optional list of node paths to inspect after execution.
                     When provided, returns a dict with "result" and "verify" keys
                     instead of just the result value.
+            return_expr: Explicit expression to evaluate after the code. Useful
+                         when the script cannot end in a convenient expression.
+            observe: Optional scene scopes to diff before and after execution.
+                     Items may be node paths or {"path": str, "depth": int}.
+            artifact_threshold: Externalize larger result values into an opaque
+                                artifact when their JSON size exceeds this many
+                                bytes. None keeps the legacy inline behavior.
+            detailed: Return the full execution report, including stdout,
+                      stderr, timing, verification, and mutation receipt.
 
         Examples:
             h.exec("hou.node('/obj').createNode('geo')")
@@ -174,15 +189,29 @@ class HoudiniClient:
         body = {"code": code}
         if verify:
             body["verify"] = verify
+        if return_expr is not None:
+            body["return_expr"] = return_expr
+        if observe:
+            body["observe"] = observe
+        if artifact_threshold is not None:
+            body["artifact_threshold"] = artifact_threshold
         resp = self._post("/exec", body)
         if not resp.get("success"):
             error = resp.get("error", "Unknown error")
             raise RuntimeError(f"Houdini error:\n{error}")
-        if verify:
-            return {"result": resp.get("result"), "verify": resp.get("verify", {})}
+        if detailed:
+            return resp
+        if verify or observe:
+            value = {"result": resp.get("result")}
+            if verify:
+                value["verify"] = resp.get("verify", {})
+            if observe:
+                value["receipt"] = resp.get("receipt", {})
+            return value
         return resp.get("result")
 
-    def raw_exec(self, code, verify=None):
+    def raw_exec(self, code, verify=None, return_expr=None, observe=None,
+                 artifact_threshold=None):
         """Execute Python code and return the full response dict.
 
         Returns:
@@ -192,9 +221,16 @@ class HoudiniClient:
         body = {"code": code}
         if verify:
             body["verify"] = verify
+        if return_expr is not None:
+            body["return_expr"] = return_expr
+        if observe:
+            body["observe"] = observe
+        if artifact_threshold is not None:
+            body["artifact_threshold"] = artifact_threshold
         return self._post("/exec", body)
 
-    def batch(self, ops, stop_on_error=True):
+    def batch(self, ops, stop_on_error=True, artifact_threshold=None,
+              detailed=False):
         """Execute multiple code snippets in one round-trip.
 
         All ops run in a single main-thread dispatch and one undo group.
@@ -215,26 +251,43 @@ class HoudiniClient:
                 {"code": "hou.node('/obj/my_geo').layoutChildren()"},
             ])
         """
-        resp = self._post("/batch", {"ops": ops, "stop_on_error": stop_on_error})
+        body = {"ops": ops, "stop_on_error": stop_on_error}
+        if artifact_threshold is not None:
+            body["artifact_threshold"] = artifact_threshold
+        resp = self._post("/batch", body)
         if not resp.get("success"):
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        if detailed:
+            return resp
         return resp.get("results")
 
     def exec_code(self, code, verify=None):
         """Alias for exec() — backwards compatibility."""
         return self.exec(code, verify=verify)
 
-    def query(self, expression):
+    def query(self, expression, artifact_threshold=None):
         """Evaluate a Python expression in Houdini and return the result.
 
         Example:
             h.query("hou.node('/obj/geo1') is not None")  # True/False
             h.query("hou.frame()")  # current frame number
         """
-        resp = self._post("/query", {"expression": expression})
+        body = {"expression": expression}
+        if artifact_threshold is not None:
+            body["artifact_threshold"] = artifact_threshold
+        resp = self._post("/query", body)
         if not resp.get("success"):
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
+
+    def evaluate(self, expression, artifact_threshold=256 * 1024):
+        """Evaluate arbitrary Houdini Python with automatic large-result storage.
+
+        Small JSON-compatible values are returned inline. Large text, arrays,
+        dictionaries, or byte payloads return an artifact descriptor accepted
+        by artifact_info/read_artifact/read_artifact_all.
+        """
+        return self.query(expression, artifact_threshold=artifact_threshold)
 
     def get_node_tree(self, path="/", depth=3):
         """Get the node hierarchy as a nested dict."""
@@ -250,7 +303,7 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
-    def set_parms(self, node_path, parms):
+    def set_parms(self, node_path, parms, detailed=False):
         """Set parameters on a node.
 
         Args:
@@ -260,6 +313,8 @@ class HoudiniClient:
         resp = self._post("/set_parms", {"path": node_path, "parms": parms})
         if not resp.get("success"):
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        if detailed:
+            return resp
         return resp.get("result")
 
     def get_attribs(self, node_path, attrib_class="point"):
@@ -344,7 +399,7 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
-    def create_node(self, parent, node_type, name=None):
+    def create_node(self, parent, node_type, name=None, detailed=False):
         """Create a new node.
 
         Args:
@@ -361,13 +416,17 @@ class HoudiniClient:
         resp = self._post("/create_node", body)
         if not resp.get("success"):
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        if detailed:
+            return resp
         return resp.get("result")
 
-    def delete_node(self, path):
+    def delete_node(self, path, detailed=False):
         """Delete a node. Use with caution."""
         resp = self._post("/delete_node", {"path": path})
         if not resp.get("success"):
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        if detailed:
+            return resp
         return resp.get("result")
 
     def scene_snapshot(self, path="/obj", depth=2):
@@ -388,6 +447,35 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
+    def observe_scene(self, path="/obj", depth=2, since=None,
+                      include_nodes=True, details=False):
+        """Observe actual scene state and optionally diff against a prior token.
+
+        Tokens are computed from the scene itself, so manual user edits are
+        visible even when they did not pass through the bridge. Nodes include a
+        session-stable ID when the running Houdini version exposes one.
+
+        Args:
+            path: Root node/network to observe.
+            depth: Descendant depth, 0-16.
+            since: Token returned by an earlier observe_scene call.
+            include_nodes: Include the current snapshot. Set False for a compact
+                           change-only poll after the first observation.
+            details: Include full before/after values for changed nodes.
+        """
+        body = {
+            "path": path,
+            "depth": depth,
+            "include_nodes": include_nodes,
+            "details": details,
+        }
+        if since:
+            body["since"] = since
+        resp = self._post("/scene_observe", body)
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
     def ui_state(self):
         """Get what the user is currently looking at.
 
@@ -401,28 +489,53 @@ class HoudiniClient:
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
 
-    def screenshot(self, output=None, width=None, height=None):
+    def screenshot(self, output=None, width=None, height=None, target="viewport",
+                   pane_name=None, pane_type=None):
         """Capture the current viewport as an image.
 
         Args:
             output: File path to save the image (default: auto temp file).
             width: Image width in pixels (default: native viewport width).
             height: Image height in pixels (default: native viewport height).
+            target: viewport (legacy default), pane, network_editor,
+                    parameters, window, or desktop.
+            pane_name: Exact pane-tab name when target is pane/window.
+            pane_type: Pane type name such as NetworkEditor or Parm.
 
         Returns:
             Dict with "path", "width", "height" of the saved image.
         """
-        body = {}
+        body = {"target": target}
         if output:
             body["output"] = output
         if width:
             body["width"] = width
         if height:
             body["height"] = height
+        if pane_name:
+            body["pane_name"] = pane_name
+        if pane_type:
+            body["pane_type"] = pane_type
         resp = self._post("/screenshot", body)
         if not resp.get("success"):
             raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
         return resp.get("result")
+
+    def capture(self, target="network_editor", output=None, width=None,
+                height=None, pane_name=None, pane_type=None):
+        """Capture any observable Houdini UI surface.
+
+        This is the discoverable general form of screenshot(); screenshot()
+        remains backward compatible with viewport capture.
+        """
+        return self.screenshot(
+            output=output,
+            width=width,
+            height=height,
+            target=target,
+            pane_name=pane_name,
+            pane_type=pane_type,
+        )
 
     def node_info(self, node_path=None, paths=None, verbose=False, output_index=0):
         """Get the full node info tree (equivalent to MMB popup).
@@ -456,6 +569,139 @@ class HoudiniClient:
     def node_exists(self, path):
         """Check if a node exists at the given path."""
         return self.query(f"hou.node('{path}') is not None")
+
+    def node_by_session_id(self, session_id):
+        """Resolve a session-stable node identity after a rename or move.
+
+        Returns the current path or None. Check capabilities()["node_session_id"]
+        when targeting older Houdini builds.
+        """
+        expression = (
+            "(lambda n: n.path() if n is not None else None)("
+            "hou.nodeBySessionId(%d) if hasattr(hou, 'nodeBySessionId') else None)"
+            % int(session_id)
+        )
+        return self.query(expression)
+
+    # --- Generic Artifacts ---
+
+    @staticmethod
+    def is_artifact(value):
+        """Return True when *value* is an artifact descriptor."""
+        return isinstance(value, dict) and isinstance(value.get("$artifact"), str)
+
+    def artifact_info(self, artifact):
+        """Return metadata for an artifact descriptor or ID."""
+        artifact_id = artifact.get("$artifact") if isinstance(artifact, dict) else artifact
+        resp = self._post("/artifact/info", {"id": artifact_id})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
+    def read_artifact(self, artifact, offset=0, limit=64 * 1024):
+        """Read one bounded text/JSON/binary chunk from an artifact."""
+        artifact_id = artifact.get("$artifact") if isinstance(artifact, dict) else artifact
+        resp = self._post(
+            "/artifact/read",
+            {"id": artifact_id, "offset": offset, "limit": limit},
+        )
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
+    def read_artifact_all(self, artifact, chunk_size=256 * 1024,
+                          parse_json=True):
+        """Read a complete artifact, optionally decoding JSON automatically."""
+        parts = []
+        offset = 0
+        descriptor = None
+        while True:
+            chunk = self.read_artifact(artifact, offset=offset, limit=chunk_size)
+            descriptor = chunk["artifact"]
+            content = chunk["content"]
+            if descriptor["kind"] == "binary":
+                parts.append(base64.b64decode(content.encode("ascii")))
+            else:
+                parts.append(content)
+            if chunk["eof"]:
+                break
+            offset = chunk["next_offset"]
+        if descriptor and descriptor["kind"] == "binary":
+            return b"".join(parts)
+        text = "".join(parts)
+        if parse_json and descriptor and descriptor["kind"] == "json":
+            return json.loads(text)
+        return text
+
+    # --- Asynchronous Jobs ---
+
+    def start_job(self, code, label=None, verify=None, return_expr=None,
+                  observe=None, artifact_threshold=256 * 1024):
+        """Queue Houdini Python and return immediately with a persistent job ID.
+
+        Jobs execute serially on Houdini's main thread. Queued jobs can be
+        cancelled. Cancellation of a running arbitrary hou cook is only a
+        request because Houdini does not guarantee safe interruption. Long
+        Python loops may cooperate by checking
+        `bridge.jobs.is_cancel_requested(HOUDINI_AGENT_JOB_ID)`.
+        """
+        body = {"code": code}
+        if label:
+            body["label"] = label
+        if verify:
+            body["verify"] = verify
+        if return_expr is not None:
+            body["return_expr"] = return_expr
+        if observe:
+            body["observe"] = observe
+        if artifact_threshold is not None:
+            body["artifact_threshold"] = artifact_threshold
+        resp = self._post("/job/start", body)
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
+    def job_status(self, job, include_result=True):
+        """Get the current state of a job descriptor or ID."""
+        job_id = job.get("id") if isinstance(job, dict) else job
+        resp = self._post(
+            "/job/status",
+            {"id": job_id, "include_result": include_result},
+        )
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
+    def list_jobs(self, include_result=False):
+        """List jobs retained by this Houdini bridge process."""
+        resp = self._post("/job/list", {"include_result": include_result})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
+    def cancel_job(self, job):
+        """Cancel a queued job or request cooperative cancellation of a running job."""
+        job_id = job.get("id") if isinstance(job, dict) else job
+        resp = self._post("/job/cancel", {"id": job_id})
+        if not resp.get("success"):
+            raise RuntimeError(f"Houdini error: {resp.get('error', 'Unknown error')}")
+        return resp.get("result")
+
+    def wait_job(self, job, timeout=None, poll_interval=0.25):
+        """Poll a job until it reaches a terminal state.
+
+        A client timeout does not cancel or lose the Houdini job; callers can
+        reconnect later and query the same ID.
+        """
+        job_id = job.get("id") if isinstance(job, dict) else job
+        started = time.time()
+        while True:
+            status = self.job_status(job_id, include_result=True)
+            if status.get("state") in ("succeeded", "failed", "cancelled"):
+                return status
+            if timeout is not None and time.time() - started >= timeout:
+                raise TimeoutError("Timed out waiting for Houdini job " + str(job_id))
+            time.sleep(max(0.01, poll_interval))
 
     # --- Undo & Backup ---
 

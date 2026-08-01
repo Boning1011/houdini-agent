@@ -1,7 +1,7 @@
 """Handlers for /get_parms and /set_parms endpoints."""
 
 import hou
-from bridge.main_thread import _run_on_main_thread, _with_undo, _log_operation
+from bridge.main_thread import _run_on_main_thread, run_mutation
 
 
 def handle_get_parms(body):
@@ -47,8 +47,11 @@ def handle_set_parms(body):
         return {"set": list(parms.keys())}
 
     label = f"Agent: set_parms {path}"
-    r = _run_on_main_thread(_with_undo(label, task))
-    _log_operation("/set_parms", label, r.get("ok", False))
+    r = run_mutation("/set_parms", label, task, spotlight=[path])
     if r.get("ok"):
-        return {"success": True, "result": r["value"]}, 200
+        return {
+            "success": True,
+            "result": r["value"],
+            "receipt": r.get("receipt"),
+        }, 200
     return {"success": False, "error": r.get("error")}, 500

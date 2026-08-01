@@ -2,10 +2,13 @@
 
 import ast
 import io
+import time
 import traceback
-from contextlib import redirect_stdout
+import uuid
+from contextlib import redirect_stderr, redirect_stdout
 
 import hou
+from bridge import artifacts
 from bridge.main_thread import (
     _run_on_main_thread,
     run_mutation,
@@ -108,6 +111,117 @@ def _verify_nodes(node_paths):
     return result
 
 
+def _normalize_observe(observe):
+    if not observe:
+        return []
+    if isinstance(observe, (str, dict)):
+        observe = [observe]
+    result = []
+    for item in observe:
+        if isinstance(item, str):
+            result.append({"path": item, "depth": 1})
+        elif isinstance(item, dict) and item.get("path"):
+            result.append({
+                "path": item["path"],
+                "depth": max(0, min(int(item.get("depth", 1)), 16)),
+            })
+    return result
+
+
+def _capture_observed(scopes):
+    from bridge.handlers.scene import _capture_subtree
+
+    captured = []
+    for scope in scopes:
+        try:
+            nodes = _capture_subtree(
+                scope["path"], scope["depth"], include_root=True
+            )
+            captured.append({**scope, "nodes": nodes})
+        except Exception as exc:
+            captured.append({**scope, "nodes": {}, "error": str(exc)})
+    return captured
+
+
+def _diff_observed(before, after):
+    from bridge.handlers.scene import _diff_snapshots
+
+    changes = []
+    for index, current in enumerate(after):
+        previous = before[index] if index < len(before) else {"nodes": {}}
+        entry = {
+            "path": current["path"],
+            "depth": current["depth"],
+            "diff": _diff_snapshots(
+                previous.get("nodes", {}), current.get("nodes", {}), details=False
+            ),
+        }
+        if previous.get("error"):
+            entry["before_error"] = previous["error"]
+        if current.get("error"):
+            entry["after_error"] = current["error"]
+        changes.append(entry)
+    return changes
+
+
+def _execute_code(code, verify_paths=None, return_expr=None, observe=None,
+                  artifact_threshold=None):
+    """Execute code in the shared namespace and return a structured report."""
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+    result_value = None
+    error_str = None
+    started = time.time()
+    started_perf = time.perf_counter()
+    request_id = uuid.uuid4().hex
+    scopes = _normalize_observe(observe)
+    before = _capture_observed(scopes) if scopes else []
+
+    try:
+        with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+            if return_expr is not None:
+                exec(compile(code, "<bridge>", "exec"), _exec_namespace)
+                result_value = eval(
+                    compile(return_expr, "<bridge-return>", "eval"),
+                    _exec_namespace,
+                )
+            else:
+                setup_code, expr_code = _extract_last_expr(code)
+                if setup_code is not None and setup_code != "":
+                    exec(setup_code, _exec_namespace)
+                if expr_code is not None:
+                    result_value = eval(expr_code, _exec_namespace)
+    except Exception:
+        error_str = traceback.format_exc()
+
+    after = _capture_observed(scopes) if scopes else []
+    elapsed = time.perf_counter() - started_perf
+    if artifact_threshold is not None and error_str is None:
+        result_value = artifacts.externalize(
+            result_value,
+            threshold=artifact_threshold,
+            name="exec-result-" + request_id,
+        )
+
+    resp = {
+        "success": error_str is None,
+        "result": result_value,
+        "output": stdout_buf.getvalue(),
+        "stderr": stderr_buf.getvalue(),
+        "error": error_str,
+        "elapsed": elapsed,
+        "receipt": {
+            "id": request_id,
+            "started_at": started,
+            "elapsed": elapsed,
+            "observed": _diff_observed(before, after) if scopes else [],
+        },
+    }
+    if verify_paths:
+        resp["verify"] = _verify_nodes(verify_paths)
+    return resp
+
+
 def handle_exec(body):
     """Execute arbitrary Python in Houdini's main thread.
 
@@ -116,41 +230,27 @@ def handle_exec(body):
     """
     code = body.get("code", "")
     verify_paths = body.get("verify", None)
+    return_expr = body.get("return_expr", None)
+    observe = body.get("observe", None)
+    artifact_threshold = body.get("artifact_threshold", None)
     if not code:
         return {"success": False, "result": None, "output": "", "error": "No 'code' provided"}, 400
 
     def task():
-        stdout_buf = io.StringIO()
-        result_value = None
-        error_str = None
-
-        setup_code, expr_code = _extract_last_expr(code)
-        try:
-            with redirect_stdout(stdout_buf):
-                if setup_code is not None and setup_code != "":
-                    exec(setup_code, _exec_namespace)
-                if expr_code is not None:
-                    result_value = eval(expr_code, _exec_namespace)
-        except Exception:
-            error_str = traceback.format_exc()
-
-        resp = {
-            "success": error_str is None,
-            "result": result_value,
-            "output": stdout_buf.getvalue(),
-            "error": error_str,
-        }
-
-        # Post-exec verification
-        if verify_paths:
-            resp["verify"] = _verify_nodes(verify_paths)
-
-        return resp
+        return _execute_code(
+            code,
+            verify_paths=verify_paths,
+            return_expr=return_expr,
+            observe=observe,
+            artifact_threshold=artifact_threshold,
+        )
 
     label = f"Agent: exec {code[:50]}"
     r = run_mutation("/exec", label, task, spotlight=verify_paths)
     if r.get("ok"):
-        return r["value"], 200
+        response = r["value"]
+        response.setdefault("receipt", {})["operation"] = r.get("receipt")
+        return response, 200
     return {
         "success": False,
         "result": None,
@@ -168,6 +268,7 @@ def handle_batch(body):
     """
     ops = body.get("ops", [])
     stop_on_error = body.get("stop_on_error", True)
+    default_artifact_threshold = body.get("artifact_threshold", None)
     if not ops:
         return {"success": False, "error": "No 'ops' provided"}, 400
 
@@ -176,32 +277,19 @@ def handle_batch(body):
         for op in ops:
             code = op.get("code", "")
             verify_paths = op.get("verify", None)
-            stdout_buf = io.StringIO()
-            result_value = None
-            error_str = None
-
-            setup_code, expr_code = _extract_last_expr(code)
-            try:
-                with redirect_stdout(stdout_buf):
-                    if setup_code:
-                        exec(compile(setup_code, "<bridge>", "exec"), _exec_namespace)
-                    if expr_code:
-                        result_value = eval(compile(expr_code, "<bridge>", "eval"), _exec_namespace)
-            except Exception:
-                error_str = traceback.format_exc()
-
-            entry = {
-                "success": error_str is None,
-                "result": result_value,
-                "output": stdout_buf.getvalue(),
-                "error": error_str,
-            }
-            if verify_paths:
-                entry["verify"] = _verify_nodes(verify_paths)
+            entry = _execute_code(
+                code,
+                verify_paths=verify_paths,
+                return_expr=op.get("return_expr", None),
+                observe=op.get("observe", None),
+                artifact_threshold=op.get(
+                    "artifact_threshold", default_artifact_threshold
+                ),
+            )
 
             results.append(entry)
 
-            if error_str and stop_on_error:
+            if not entry["success"] and stop_on_error:
                 break
 
         return results
@@ -210,7 +298,11 @@ def handle_batch(body):
     all_verify = [p for op in ops for p in (op.get("verify") or [])]
     r = run_mutation("/batch", label, task, spotlight=all_verify or None)
     if r.get("ok"):
-        return {"success": True, "results": r["value"]}, 200
+        return {
+            "success": True,
+            "results": r["value"],
+            "receipt": r.get("receipt"),
+        }, 200
     return {"success": False, "error": r.get("error") or r.get("traceback", "Unknown error")}, 500
 
 
@@ -218,11 +310,17 @@ def handle_query(body):
     """Evaluate a Python expression and return the result."""
     import hou
     expression = body.get("expression", "")
+    artifact_threshold = body.get("artifact_threshold", None)
     if not expression:
         return {"success": False, "error": "No 'expression' provided"}, 400
 
     def task():
-        return eval(expression, {"hou": hou, "__builtins__": __builtins__})
+        value = eval(expression, {"hou": hou, "__builtins__": __builtins__})
+        if artifact_threshold is not None:
+            value = artifacts.externalize(
+                value, threshold=artifact_threshold, name="query-result"
+            )
+        return value
 
     r = _run_on_main_thread(task)
     if r.get("ok"):

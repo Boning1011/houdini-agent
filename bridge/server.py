@@ -14,7 +14,7 @@ import signal
 import socket
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from bridge import discovery
 from bridge.main_thread import _main_thread_processor
@@ -23,7 +23,7 @@ from bridge.handlers import POST_HANDLERS
 DEFAULT_PORT = 8765
 
 
-class _ExclusiveHTTPServer(HTTPServer):
+class _ExclusiveHTTPServer(ThreadingHTTPServer):
     """HTTPServer that refuses to share a port with another process.
 
     Python's stock HTTPServer sets `allow_reuse_address = 1`, which turns on
@@ -39,6 +39,7 @@ class _ExclusiveHTTPServer(HTTPServer):
     must stay off — the two flags are mutually exclusive on the same socket.
     """
     allow_reuse_address = False
+    daemon_threads = True
 
     def server_bind(self):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
@@ -178,6 +179,7 @@ def stop_server():
     else:
         hou.ui.removeEventLoopCallback(_main_thread_processor)
         _server_instance.shutdown()
+        _server_instance.server_close()
 
     discovery.unregister()
     _server_instance = None
@@ -247,6 +249,7 @@ def serve_headless(port=DEFAULT_PORT, poll_interval=0.02):
         signal.signal(signal.SIGINT, prev_int)
         signal.signal(signal.SIGTERM, prev_term)
         server.shutdown()
+        server.server_close()
         discovery.unregister()
         _server_instance = None
         _headless_stop = None

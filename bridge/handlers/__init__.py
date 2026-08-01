@@ -12,6 +12,7 @@ from bridge.handlers.scene import (
     handle_create_node,
     handle_delete_node,
     handle_scene_snapshot,
+    handle_scene_observe,
     handle_ui_state,
     handle_node_info,
     handle_undo_history,
@@ -24,6 +25,13 @@ from bridge.handlers.geometry import (
     handle_attrib_values,
 )
 from bridge.handlers.viewport import handle_screenshot
+from bridge.handlers.artifacts import handle_artifact_info, handle_artifact_read
+from bridge.handlers.jobs import (
+    handle_job_start,
+    handle_job_status,
+    handle_job_list,
+    handle_job_cancel,
+)
 
 # Endpoint -> handler function.  Add new endpoints here.
 POST_HANDLERS = {
@@ -40,8 +48,15 @@ POST_HANDLERS = {
     "/create_node":    handle_create_node,
     "/delete_node":    handle_delete_node,
     "/scene_snapshot": handle_scene_snapshot,
+    "/scene_observe":  handle_scene_observe,
     "/screenshot":     handle_screenshot,
     "/ui_state":       handle_ui_state,
     "/node_info":      handle_node_info,
     "/undo_history":   handle_undo_history,
+    "/artifact/info":  handle_artifact_info,
+    "/artifact/read":  handle_artifact_read,
+    "/job/start":      handle_job_start,
+    "/job/status":     handle_job_status,
+    "/job/list":       handle_job_list,
+    "/job/cancel":     handle_job_cancel,
 }

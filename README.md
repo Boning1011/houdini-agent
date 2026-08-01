@@ -17,7 +17,13 @@ The bridge follows two rules:
 1. **If the agent can figure it out, let it.** Coding agents already search docs, manage context, plan multi-step tasks, and recover from errors. Rebuilding any of that inside the bridge is wasted effort that ages poorly. No built-in LLM client, no memory system, no document indexing — the agent brings all of that.
 2. **If it takes years of experience to know, write it down.** If you've used Houdini for 5, 10, 15 years, you carry knowledge the docs never teach — which approach actually holds up in production, which "correct" solution falls apart at scale, what to reach for when a scene breaks in ways you've seen before. That kind of experience compresses into a few Markdown files (`context/`), not dozens of specialized tool endpoints. When Houdini changes or a better pattern emerges, you update a text file, not the codebase.
 
-This means the bridge is deliberately small: ~1,800 lines, zero external dependencies, and only two core write operations (`exec` and `batch`). Everything else is reading helpers that reduce round-trips. The agent writes Python directly against the `hou` module — no preset workflows to constrain it, no specialized tool library to maintain. As agents get smarter, this same thin interface lets them do more, without code changes.
+This means the bridge is deliberately small, has zero external dependencies, and keeps only two core write operations (`exec` and `batch`). Everything else is observation, transport, safety, or scheduling infrastructure. The agent writes Python directly against the `hou` module — no preset workflows to constrain it, no specialized tool library to maintain. As agents get smarter, this same thin interface lets them do more, without code changes.
+
+The test for adding a bridge feature is deliberately strict: **would a model ten
+times smarter still need it?** The bridge owns interface limits that intelligence
+cannot reason away: observation bandwidth, reliable execution, long-running
+state, large-result transport, UI visibility, and recoverability. Houdini recipes
+and domain workflows stay outside the core.
 
 ### Agent-agnostic
 
@@ -129,6 +135,29 @@ h.batch([
 
 # Capture viewport screenshot
 img = h.screenshot()               # → {"path": "...", "width": 1280, "height": 720}
+
+# Full report: result + stdout/stderr + timing + mutation receipt
+report = h.exec(
+    "node.parm('tx').set(5)",
+    observe=[{"path": "/obj/geo1", "depth": 1}],
+    detailed=True,
+)
+
+# Detect bridge edits and manual user edits from actual scene state
+before = h.observe_scene("/obj/geo1", depth=1)
+after = h.observe_scene("/obj/geo1", depth=1, since=before["token"])
+
+# Large arbitrary values become paged artifacts instead of giant JSON responses
+value = h.evaluate("build_a_large_python_value()")
+if h.is_artifact(value):
+    value = h.read_artifact_all(value)
+
+# Long hou work survives client timeouts and reconnects
+job = h.start_job("run_long_cache(); 'done'")
+final = h.wait_job(job, timeout=3600)
+
+# Capture the actual Houdini pane, not only the 3D viewport
+network_image = h.capture("network_editor")
 ```
 
 ## API
@@ -137,10 +166,12 @@ img = h.screenshot()               # → {"path": "...", "width": 1280, "height"
 
 | Method | Description |
 |---|---|
-| `status()` | Health check — returns server info, hip file, Houdini version |
-| `exec(code, verify=[...])` | Execute Python in Houdini; optionally verify node health after |
-| `batch(ops, stop_on_error)` | Multiple code snippets in one round-trip (single undo group) |
-| `query(expression)` | Evaluate a Python expression and return the result |
+| `status()` | Runtime capabilities plus Houdini/Python/UI/Qt and scene information |
+| `exec(code, verify, return_expr, observe, detailed)` | Execute Python and optionally return streams, timing, verification, and mutation diff |
+| `raw_exec(...)` | Always return the complete structured execution report |
+| `batch(ops, stop_on_error, detailed)` | Multiple snippets in one round-trip and one undo group |
+| `query(expression, artifact_threshold)` | Evaluate a Python expression and return the result |
+| `evaluate(expression)` | Query with automatic large-result artifact storage |
 
 ### Scene & Nodes
 
@@ -148,6 +179,7 @@ img = h.screenshot()               # → {"path": "...", "width": 1280, "height"
 |---|---|
 | `get_node_tree(path, depth)` | Node hierarchy as nested dict |
 | `scene_snapshot(path, depth)` | Rich snapshot — nodes, connections, non-default parms, flags, errors |
+| `observe_scene(path, depth, since)` | Actual-state token and diff; sees manual edits and recognizes renames by session ID |
 | `node_info(node_path)` or `node_info(paths=[...])` | Full node info tree (MMB popup) — cook time, geo counts, attribs, memory, bbox. Batch mode supported |
 | `create_node(parent, type, name)` | Create a node |
 | `delete_node(path)` | Delete a node |
@@ -170,11 +202,33 @@ img = h.screenshot()               # → {"path": "...", "width": 1280, "height"
 | `attrib_stats(node_path, attribs, class, samples)` | Value stats: min/max/mean/samples for numeric, unique/top for strings |
 | `attrib_values(node_path, attribs, class, start, count, stride, reverse)` | Read sampled attribute values with flexible pagination |
 
-### Viewport
+### Visual observation
 
 | Method | Description |
 |---|---|
 | `screenshot(output, width, height)` | Capture viewport as PNG — returns file path |
+| `capture(target, ...)` | Capture `network_editor`, `parameters`, `pane`, `window`, or `desktop` |
+
+### Artifacts & long jobs
+
+| Method | Description |
+|---|---|
+| `artifact_info(ref)` | Metadata, size, hash, kind, and path for an opaque result artifact |
+| `read_artifact(ref, offset, limit)` | Read one bounded artifact chunk |
+| `read_artifact_all(ref)` | Reassemble and decode a complete artifact |
+| `start_job(code, ...)` | Queue main-thread Houdini work and immediately return a reconnectable ID |
+| `job_status(id)` / `list_jobs()` | Poll one job or discover retained jobs after reconnecting |
+| `wait_job(id, timeout)` | Client-side polling; timeout does not discard the Houdini job |
+| `cancel_job(id)` | Cancel queued work; running arbitrary cooks use cooperative cancellation only |
+
+### Cross-version behavior
+
+The bridge does not maintain a hand-authored Houdini-version decision table.
+`status()` reports Python, UI/Qt availability, and protocol capabilities at
+runtime. Features probe the available API and return a structured error or
+fallback when unavailable. The contract suite runs in GUI Houdini and disposable
+headless `hython`; current coverage includes Houdini 21 / Python 3.11 and Houdini
+22 / Python 3.13.
 
 ### Undo & Backup
 
@@ -184,6 +238,21 @@ img = h.screenshot()               # → {"path": "...", "width": 1280, "height"
 | `backup(directory)` | Save a timestamped .hip backup (default: `$HIP/.agent_backups/`) |
 | `list_backups(directory)` | List available .hip backups, newest first |
 | `restore_backup(path)` | Load a .hip backup |
+
+## Tests
+
+The contract suite is standard-library `unittest`, so it runs under system
+Python and Houdini's bundled Python without installing anything:
+
+```bash
+python -m unittest discover -s tests -v
+hython -m unittest discover -s tests -v
+```
+
+For a real disposable headless bridge, start
+`tests/hython_server_runner.py <port>` with any `hython`, then run
+`python tests/integration_headless_client.py <port>`. The integration process
+uses a new empty scene and never saves it.
 
 ## Repo Structure
 
