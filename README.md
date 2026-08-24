@@ -1,6 +1,8 @@
 # Houdini Agent
 
-A toolkit that lets AI coding agents control SideFX Houdini from the outside via a zero-dependency Python bridge.
+Houdini Agent is an open-source toolkit created and maintained by [Bo-Ning Li](https://boningli.com). It lets AI coding agents control SideFX Houdini from the outside through a zero-dependency Python bridge.
+
+**Design notes:** [boningli.com/blog/houdini-agent-design-philosophy](https://boningli.com/blog/houdini-agent-design-philosophy)
 
 ## The Thinking Behind This
 
