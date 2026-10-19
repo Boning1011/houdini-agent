@@ -74,9 +74,15 @@ Set `HOUDINI_AGENT_ROOT` in your OS environment (Windows: System Properties > En
 
 ## Quick Start
 
+With the Houdini package installed, the bridge and Python Panel register
+automatically on GUI startup, including when opening a `.hip` directly or
+launching Houdini Core. The UI-ready startup hook reuses the same idempotent
+bootstrap as `123.py`. Set `HOUDINI_AGENT_AUTOSTART=0` to opt out.
+
 ### Option A: Auto-start on launch (recommended)
 
-With the package installed, `scripts/123.py` fires on every Houdini launch and:
+With the package installed, `scripts/python/uiready.py` runs after the GUI is
+ready; `scripts/123.py` also bootstraps empty FX scenes. The shared bootstrap:
 - starts the bridge server automatically (no UI click needed)
 - registers the Python Panel into the pane tab menu (idempotent)
 
